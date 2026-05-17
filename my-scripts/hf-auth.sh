@@ -1,0 +1,1 @@
+hf auth login --token ${HUGGINGFACE_TOKEN} --add-to-git-credential
