@@ -61,6 +61,7 @@ class SOFollower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+        self._last_observation_timing: dict[str, float] = {}
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -83,6 +84,11 @@ class SOFollower(Robot):
     @property
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
+
+    @property
+    def last_observation_timing(self) -> dict[str, float]:
+        """Timing for the latest observation read, in seconds."""
+        return self._last_observation_timing.copy()
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
@@ -176,20 +182,33 @@ class SOFollower(Robot):
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
+        timing: dict[str, float] = {}
+        observation_start = time.perf_counter()
+
         # Read arm position
-        start = time.perf_counter()
+        motor_start = time.perf_counter()
+        start = motor_start
         obs_dict = self.bus.sync_read("Present_Position")
+        timing["robot.motors.sync_read"] = time.perf_counter() - start
+
+        start = time.perf_counter()
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
-        dt_ms = (time.perf_counter() - start) * 1e3
+        timing["robot.motors.map_positions"] = time.perf_counter() - start
+        dt_ms = (time.perf_counter() - motor_start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
             obs_dict[cam_key] = cam.read_latest()
+            timing[f"robot.camera.{cam_key}.read_latest"] = time.perf_counter() - start
+            for name, value in getattr(cam, "last_timing", {}).items():
+                timing[f"robot.camera.{cam_key}.{name}"] = value
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
+        timing["robot.get_observation.internal_total"] = time.perf_counter() - observation_start
+        self._last_observation_timing = timing
         return obs_dict
 
     @check_if_not_connected

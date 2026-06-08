@@ -37,6 +37,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _record_timing(timing: dict[str, float] | None, name: str, start: float) -> None:
+    if timing is not None:
+        timing[name] = time.perf_counter() - start
+
+
 class RolloutStrategy(abc.ABC):
     """Abstract base for rollout execution strategies.
 
@@ -271,6 +276,7 @@ def send_next_action(
     obs_raw: dict,
     ctx: RolloutContext,
     interpolator: ActionInterpolator,
+    timing: dict[str, float] | None = None,
 ) -> dict | None:
     """Dispatch the next action to the robot.
 
@@ -286,19 +292,50 @@ def send_next_action(
     features = ctx.data.dataset_features
     ordered_keys = ctx.data.ordered_action_keys
 
-    if interpolator.needs_new_action():
-        obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
-        action_tensor = engine.get_action(obs_frame)
-        if action_tensor is not None:
-            interpolator.add(action_tensor.cpu())
+    total_start = time.perf_counter()
+    needs_new_action = interpolator.needs_new_action()
+    if timing is not None:
+        timing["action.marker.requested_new_action"] = 1.0 if needs_new_action else 0.0
 
+    if needs_new_action:
+        stage_start = time.perf_counter()
+        obs_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+        _record_timing(timing, "action.build_dataset_frame", stage_start)
+
+        stage_start = time.perf_counter()
+        action_tensor = engine.get_action(obs_frame)
+        _record_timing(timing, "action.engine_get_action", stage_start)
+        if timing is not None:
+            timing["action.marker.received_new_action"] = 1.0 if action_tensor is not None else 0.0
+        if action_tensor is not None:
+            stage_start = time.perf_counter()
+            interpolator.add(action_tensor.cpu())
+            _record_timing(timing, "action.interpolator_add", stage_start)
+    elif timing is not None:
+        timing["action.engine_get_action"] = 0.0
+        timing["action.marker.received_new_action"] = 0.0
+
+    stage_start = time.perf_counter()
     interp = interpolator.get()
+    _record_timing(timing, "action.interpolator_get", stage_start)
+    if timing is not None:
+        timing["action.marker.sent_action"] = 1.0 if interp is not None else 0.0
     if interp is None:
+        _record_timing(timing, "action.total", total_start)
         return None
 
     if len(interp) != len(ordered_keys):
         raise ValueError(f"Interpolated tensor length ({len(interp)}) != action keys ({len(ordered_keys)})")
+    stage_start = time.perf_counter()
     action_dict = {k: interp[i].item() for i, k in enumerate(ordered_keys)}
+    _record_timing(timing, "action.to_dict", stage_start)
+
+    stage_start = time.perf_counter()
     processed = ctx.processors.robot_action_processor((action_dict, obs_raw))
+    _record_timing(timing, "action.robot_action_processor", stage_start)
+
+    stage_start = time.perf_counter()
     ctx.hardware.robot_wrapper.send_action(processed)
+    _record_timing(timing, "action.robot_send_action", stage_start)
+    _record_timing(timing, "action.total", total_start)
     return action_dict

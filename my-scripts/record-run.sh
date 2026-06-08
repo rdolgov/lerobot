@@ -7,8 +7,8 @@ lerobot-record \
     --teleop.port=/dev/tty.usbmodem5AE60574511 \
     --teleop.id=my_awesome_leader_arm \
     --display_data=true \
-    --dataset.repo_id="${HF_USER}"/record-test--claire-may16-1301 \
+    --dataset.repo_id="${HF_USER}"/record-test-claire-may17-1502 \
     --dataset.num_episodes=5 \
-    --dataset.single_task="Grab the red ring may 16 by Claire" \
+    --dataset.single_task="Grab the red ring may 17 by Claire" \
     --dataset.streaming_encoding=true \
     --dataset.encoder_threads=2 

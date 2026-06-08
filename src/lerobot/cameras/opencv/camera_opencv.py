@@ -115,6 +115,8 @@ class OpenCVCamera(Camera):
         self.frame_lock: Lock = Lock()
         self.latest_frame: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
+        self._last_capture_timing: dict[str, float] = {}
+        self._last_read_timing: dict[str, float] = {}
         self.new_frame_event: Event = Event()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
@@ -132,6 +134,12 @@ class OpenCVCamera(Camera):
     def is_connected(self) -> bool:
         """Checks if the camera is currently connected and opened."""
         return isinstance(self.videocapture, cv2.VideoCapture) and self.videocapture.isOpened()
+
+    @property
+    def last_timing(self) -> dict[str, float]:
+        """Timing for the latest camera-thread capture and main-thread read, in seconds."""
+        with self.frame_lock:
+            return (self._last_read_timing or self._last_capture_timing).copy()
 
     @check_if_already_connected
     def connect(self, warmup: bool = True) -> None:
@@ -442,13 +450,25 @@ class OpenCVCamera(Camera):
         failure_count = 0
         while not self.stop_event.is_set():
             try:
-                raw_frame = self._read_from_hardware()
-                processed_frame = self._postprocess_image(raw_frame)
-                capture_time = time.perf_counter()
+                timings: dict[str, float] = {}
+                capture_start = time.perf_counter()
 
+                stage_start = time.perf_counter()
+                raw_frame = self._read_from_hardware()
+                timings["capture.read_hardware"] = time.perf_counter() - stage_start
+
+                stage_start = time.perf_counter()
+                processed_frame = self._postprocess_image(raw_frame)
+                timings["capture.postprocess_image"] = time.perf_counter() - stage_start
+                capture_time = time.perf_counter()
+                timings["capture.total"] = capture_time - capture_start
+
+                stage_start = time.perf_counter()
                 with self.frame_lock:
                     self.latest_frame = processed_frame
                     self.latest_timestamp = capture_time
+                    timings["capture.store_latest"] = time.perf_counter() - stage_start
+                    self._last_capture_timing = timings
                 self.new_frame_event.set()
                 failure_count = 0
 
@@ -485,6 +505,8 @@ class OpenCVCamera(Camera):
         with self.frame_lock:
             self.latest_frame = None
             self.latest_timestamp = None
+            self._last_capture_timing = {}
+            self._last_read_timing = {}
             self.new_frame_event.clear()
 
     @check_if_not_connected
@@ -552,6 +574,7 @@ class OpenCVCamera(Camera):
         with self.frame_lock:
             frame = self.latest_frame
             timestamp = self.latest_timestamp
+            capture_timing = self._last_capture_timing.copy()
 
         if frame is None or timestamp is None:
             raise RuntimeError(f"{self} has not captured any frames yet.")
@@ -561,6 +584,12 @@ class OpenCVCamera(Camera):
             raise TimeoutError(
                 f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
             )
+
+        with self.frame_lock:
+            self._last_read_timing = {
+                **capture_timing,
+                "read_latest.frame_age": age_ms / 1000.0,
+            }
 
         return frame
 
@@ -587,6 +616,8 @@ class OpenCVCamera(Camera):
         with self.frame_lock:
             self.latest_frame = None
             self.latest_timestamp = None
+            self._last_capture_timing = {}
+            self._last_read_timing = {}
             self.new_frame_event.clear()
 
         logger.info(f"{self} disconnected.")

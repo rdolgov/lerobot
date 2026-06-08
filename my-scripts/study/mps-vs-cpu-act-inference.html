@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MPS vs CPU for LeRobot ACT Inference</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #1f2933;
+      --muted: #52616f;
+      --line: #d7dce0;
+      --accent: #0f766e;
+      --accent-2: #8a4b0f;
+      --code-bg: #101820;
+      --code-ink: #e6edf3;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 32px 0 12px;
+      font-size: 1.35rem;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 1.05rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    .lede {
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0 8px;
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .metric {
+      display: block;
+      margin-top: 6px;
+      color: var(--accent);
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef3f2;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      background: #eef1f4;
+      border-radius: 4px;
+      padding: 0.12em 0.32em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      margin: 14px 0;
+      overflow: auto;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+
+    ul {
+      margin: 8px 0 16px;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: #eef8f6;
+      padding: 14px 16px;
+      margin: 18px 0;
+    }
+
+    .warn {
+      border-left-color: var(--accent-2);
+      background: #fff7ed;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 720px) {
+      .summary {
+        grid-template-columns: 1fr;
+      }
+
+      th,
+      td {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>MPS vs CPU for LeRobot ACT Inference</h1>
+      <p class="lede">
+        A short explanation of why your ACT policy behaves differently on Apple MPS and CPU,
+        using the timing logs from your SO-101 rollout.
+      </p>
+    </header>
+
+    <section class="summary" aria-label="Observed timing summary">
+      <div class="panel">
+        <span class="label">CPU chunk refill timing</span>
+        <span class="metric">~190-245 ms</span>
+        <p class="small">CPU was steady, but each ACT chunk refill stayed around 4-5 Hz.</p>
+      </div>
+      <div class="panel">
+        <span class="label">MPS after warmup</span>
+        <span class="metric">~47-55 ms</span>
+        <p class="small">MPS had a slow first refill, then much faster follow-up refill ticks.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Bottom Line</h2>
+      <p>
+        For your ACT model, MPS is the better runtime after it warms up. CPU inference stayed near
+        <code>~250 ms</code> per chunk refill, while MPS dropped to about <code>~50 ms</code> on later
+        chunk refills when device synchronization timing was disabled.
+      </p>
+      <div class="callout">
+        Use <code>--policy.device=mps</code> for this rollout. Keep <code>LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=0</code>
+        unless you specifically need synchronized stage-level profiling.
+      </div>
+    </section>
+
+    <section>
+      <h2>What CPU Mode Does</h2>
+      <p>
+        CPU mode runs PyTorch tensor operations on the Mac CPU cores. It has simple timing behavior:
+        the operation usually finishes before Python continues, so profiler numbers are easier to read.
+      </p>
+      <p>
+        In your CPU run, almost all time was spent in ACT's model call:
+      </p>
+      <pre><code>loop.total ~= 248 ms
+inference.policy_select_action ~= 243 ms
+robot.get_observation ~= 1 ms
+robot.send_action ~= 0.1 ms</code></pre>
+      <p>
+        This says the cameras and robot serial command path were fine. The CPU bottleneck was model
+        inference.
+      </p>
+    </section>
+
+    <section>
+      <h2>What MPS Mode Does</h2>
+      <p>
+        MPS is Apple's Metal Performance Shaders backend for PyTorch. It moves eligible tensor
+        operations to the Apple GPU through Metal. That can accelerate neural network operations,
+        especially convolution and transformer work, but it behaves differently from CPU execution.
+      </p>
+      <ul>
+        <li>MPS has one-time setup and kernel warmup costs.</li>
+        <li>MPS execution is more asynchronous than CPU execution.</li>
+        <li>Some operations may still run on CPU or require CPU/GPU data movement.</li>
+        <li>Fine-grained timing can look misleading unless the device is synchronized.</li>
+      </ul>
+      <p>
+        Your MPS run showed this pattern:
+      </p>
+      <pre><code>first refill tick ~= 240 ms
+later refill ticks ~= 47-55 ms</code></pre>
+      <p>
+        That is normal: the first call pays warmup/setup costs; later calls reuse initialized kernels
+        and cached execution paths.
+      </p>
+    </section>
+
+    <section>
+      <h2>Why Stage Timings Look Odd on MPS</h2>
+      <p>
+        With <code>LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=0</code>, Python does not force MPS to finish every
+        GPU operation before recording each stage time. This reduces profiling overhead and better reflects
+        control-loop performance, but individual stage numbers can shift.
+      </p>
+      <p>
+        For example, your MPS log showed values like:
+      </p>
+      <pre><code>inference.policy_select_action ~= 15 ms
+inference.postprocessor ~= 25-35 ms</code></pre>
+      <p>
+        That does not necessarily mean the postprocessor is truly the expensive operation. Some GPU work
+        launched during <code>policy_select_action</code> may only become visible later when another operation
+        forces synchronization.
+      </p>
+      <div class="callout warn">
+        For MPS, trust <code>loop.total</code> for control performance. Treat per-stage timings as approximate
+        unless <code>LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=1</code>.
+      </div>
+    </section>
+
+    <section>
+      <h2>ACT Chunk Caching</h2>
+      <p>
+        ACT predicts a chunk of future actions, then returns cached actions for later control ticks.
+        With <code>n_action_steps=25</code> and <code>fps=25</code>, the model should run roughly once per second.
+      </p>
+      <pre><code>tick 1:  run ACT model, create 25 actions
+ticks 2-25: use cached actions
+tick 26: run ACT model again</code></pre>
+      <p>
+        This is why occasional slow-loop warnings are acceptable. The warning marks the chunk refill tick,
+        not necessarily every control tick.
+      </p>
+    </section>
+
+    <section>
+      <h2>Comparison Table</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>CPU</th>
+            <th>MPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Execution hardware</td>
+            <td>Mac CPU cores</td>
+            <td>Apple GPU through Metal</td>
+          </tr>
+          <tr>
+            <td>Observed ACT refill time</td>
+            <td><code>~190-245 ms</code></td>
+            <td><code>~47-55 ms</code> after warmup</td>
+          </tr>
+          <tr>
+            <td>Warmup behavior</td>
+            <td>Usually modest</td>
+            <td>First inference can be much slower</td>
+          </tr>
+          <tr>
+            <td>Profiling clarity</td>
+            <td>Per-stage timings are easier to interpret</td>
+            <td>Per-stage timings can move because execution is asynchronous</td>
+          </tr>
+          <tr>
+            <td>Best current choice</td>
+            <td>Useful fallback</td>
+            <td>Recommended for your ACT rollout</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Recommended Run Settings</h2>
+      <p>
+        For normal use after debugging:
+      </p>
+      <pre><code>LEROBOT_ROLLOUT_TIMING=0 \
+LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=0 \
+lerobot-rollout \
+  --policy.device=mps \
+  --fps=25</code></pre>
+      <p>
+        For occasional diagnostics with low overhead:
+      </p>
+      <pre><code>LEROBOT_ROLLOUT_TIMING=1 \
+LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=0 \
+lerobot-rollout \
+  --policy.device=mps \
+  --fps=25</code></pre>
+      <p>
+        For more accurate MPS stage attribution, at the cost of overhead:
+      </p>
+      <pre><code>LEROBOT_ROLLOUT_TIMING=1 \
+LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=1 \
+lerobot-rollout \
+  --policy.device=mps \
+  --fps=25</code></pre>
+    </section>
+
+    <section>
+      <h2>Interpreting Warnings</h2>
+      <p>
+        At <code>fps=25</code>, the loop budget is only <code>40 ms</code>. If an MPS chunk refill takes
+        <code>50 ms</code>, it will still produce a warning even though it is close to the target. That is
+        much better than the CPU refill path at <code>~250 ms</code>.
+      </p>
+      <p>
+        A warning once per action chunk is usually acceptable. A warning on every control tick means the
+        action cache is not being used or the policy is being reset too often.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

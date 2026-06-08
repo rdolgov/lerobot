@@ -79,6 +79,11 @@ class InferenceEngine(abc.ABC):
         """Resume background inference.  Default: no-op."""
 
     @property
+    def last_timing(self) -> dict[str, float]:
+        """Timings from the most recent backend action request, in seconds."""
+        return {}
+
+    @property
     def ready(self) -> bool:
         """True once the backend can produce actions (e.g. warmup done)."""
         return True

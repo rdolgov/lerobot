@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
 from contextlib import nullcontext
 from copy import copy
 
@@ -29,6 +31,25 @@ from lerobot.processor import PolicyProcessorPipeline
 from .base import InferenceEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _sync_device_for_timing(device: torch.device) -> None:
+    if not (_env_flag("LEROBOT_ROLLOUT_TIMING") and _env_flag("LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE")):
+        return
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+    elif (
+        device.type == "mps"
+        and hasattr(torch, "mps")
+        and hasattr(torch.mps, "synchronize")
+        and hasattr(torch.backends, "mps")
+        and torch.backends.mps.is_available()
+    ):
+        torch.mps.synchronize()
 
 
 # TODO(Steven): support relative-action policies.  The per-tick flow refreshes
@@ -73,6 +94,7 @@ class SyncInferenceEngine(InferenceEngine):
         self._task = task
         self._device = torch.device(device or "cpu")
         self._robot_type = robot_type
+        self._last_timing: dict[str, float] = {}
         logger.info(
             "SyncInferenceEngine initialized (device=%s, action_keys=%d)",
             self._device,
@@ -93,10 +115,17 @@ class SyncInferenceEngine(InferenceEngine):
         self._policy.reset()
         self._preprocessor.reset()
         self._postprocessor.reset()
+        self._last_timing = {}
+
+    @property
+    def last_timing(self) -> dict[str, float]:
+        """Timings from the most recent synchronous inference call, in seconds."""
+        return self._last_timing.copy()
 
     def get_action(self, obs_frame: dict | None) -> torch.Tensor | None:
         """Run the full inference pipeline on ``obs_frame`` and return an action tensor."""
         if obs_frame is None:
+            self._last_timing = {}
             return None
         # Shallow copy is intentional: the caller (`send_next_action`) builds
         # ``obs_frame`` fresh per tick via ``build_dataset_frame``, so the
@@ -107,16 +136,42 @@ class SyncInferenceEngine(InferenceEngine):
             if self._device.type == "cuda" and self._policy.config.use_amp
             else nullcontext()
         )
+        timings: dict[str, float] = {}
+
+        def record_stage(name: str, start: float) -> None:
+            _sync_device_for_timing(self._device)
+            timings[f"inference.{name}"] = time.perf_counter() - start
+
+        total_start = time.perf_counter()
         with torch.inference_mode(), autocast_ctx:
+            stage_start = time.perf_counter()
             observation = prepare_observation_for_inference(
                 observation, self._device, self._task, self._robot_type
             )
+            record_stage("prepare_observation", stage_start)
+
+            stage_start = time.perf_counter()
             observation = self._preprocessor(observation)
+            record_stage("preprocessor", stage_start)
+
+            stage_start = time.perf_counter()
             action = self._policy.select_action(observation)
+            record_stage("policy_select_action", stage_start)
+
+            stage_start = time.perf_counter()
             action = self._postprocessor(action)
+            record_stage("postprocessor", stage_start)
+
+        stage_start = time.perf_counter()
         action_tensor = action.squeeze(0).cpu()
+        record_stage("to_cpu", stage_start)
 
         # Reorder to match dataset action ordering so the caller can treat
         # the returned tensor uniformly across backends.
+        stage_start = time.perf_counter()
         action_dict = make_robot_action(action_tensor, self._dataset_features)
-        return torch.tensor([action_dict[k] for k in self._ordered_action_keys])
+        ordered_action = torch.tensor([action_dict[k] for k in self._ordered_action_keys])
+        timings["inference.reorder_action"] = time.perf_counter() - stage_start
+        timings["inference.total"] = time.perf_counter() - total_start
+        self._last_timing = timings
+        return ordered_action

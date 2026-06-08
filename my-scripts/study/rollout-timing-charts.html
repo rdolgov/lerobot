@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeRobot Rollout Timing Charts</title>
+  <style>
+    :root {
+      --bg: #f6f7f4;
+      --paper: #ffffff;
+      --ink: #1f2933;
+      --muted: #52616f;
+      --line: #d9dee3;
+      --green: #0f766e;
+      --blue: #2563eb;
+      --amber: #b45309;
+      --red: #b42318;
+      --violet: #6d28d9;
+      --slate: #475569;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.48 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 52px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(2rem, 5vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 28px 0 12px;
+      font-size: 1.28rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    code {
+      background: #edf1f4;
+      border-radius: 4px;
+      padding: 0.12em 0.32em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 170px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--ink);
+      background: var(--paper);
+    }
+
+    button {
+      border: 0;
+      border-radius: 7px;
+      background: var(--green);
+      color: white;
+      cursor: pointer;
+      font-weight: 700;
+      padding: 10px 14px;
+    }
+
+    button.secondary {
+      background: #334155;
+    }
+
+    .lede {
+      color: var(--muted);
+      max-width: 860px;
+      font-size: 1.05rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+
+    .card,
+    .chart-card,
+    .note {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .card span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .card strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--green);
+      font-size: 1.45rem;
+      line-height: 1.1;
+    }
+
+    .chart-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .chart-card.full {
+      grid-column: 1 / -1;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 260px;
+      margin-top: 8px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
+
+    .swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      margin-right: 5px;
+      vertical-align: -1px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin: 10px 0 18px;
+    }
+
+    .note {
+      border-left: 4px solid var(--amber);
+      margin: 18px 0;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+    }
+
+    th {
+      background: #eef3f2;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    @media (max-width: 860px) {
+      .grid,
+      .chart-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .chart-card.full {
+        grid-column: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>LeRobot Rollout Timing Charts</h1>
+      <p class="lede">
+        Visualizes per-frame timing logs from <code>lerobot-rollout</code>. The charts separate ACT chunk
+        refills from cheap cached-action frames, which is the key pattern in your latest MPS run.
+      </p>
+    </header>
+
+    <section class="note">
+      <p>
+        In the pasted log, <code>source=model</code> is misleading: sync inference calls
+        <code>ACTPolicy.select_action</code> every frame, but most calls only pop an already-computed action
+        from ACT's internal queue. This report classifies a frame as <strong>chunk refill</strong> when
+        <code>loop</code>, <code>engine</code>, or <code>policy</code> timing shows a real chunk computation.
+      </p>
+    </section>
+
+    <section>
+      <h2>Paste Or Re-Parse Logs</h2>
+      <p class="small">
+        The text box is preloaded with a compact extraction from your latest run. Paste a full terminal log
+        and click Render to regenerate the charts.
+      </p>
+      <textarea id="logInput" spellcheck="false"></textarea>
+      <div class="controls">
+        <button id="renderButton">Render Charts</button>
+        <button class="secondary" id="sampleButton">Restore Sample</button>
+        <span class="small">Target budget at 25 FPS: <code>40 ms</code></span>
+      </div>
+    </section>
+
+    <section class="grid" id="summaryCards"></section>
+
+    <section class="chart-grid">
+      <article class="chart-card full">
+        <h2>Frame Timeline</h2>
+        <p class="small">Loop duration per frame. Red bars are ACT chunk refills; green bars are cached-action frames.</p>
+        <canvas id="timelineChart" width="1100" height="310"></canvas>
+        <div class="legend">
+          <span><i class="swatch" style="background: var(--red)"></i>Chunk refill</span>
+          <span><i class="swatch" style="background: var(--green)"></i>ACT cached action</span>
+          <span><i class="swatch" style="background: #111827"></i>40 ms target line</span>
+        </div>
+      </article>
+
+      <article class="chart-card">
+        <h2>Average Stage Cost</h2>
+        <p class="small">Average milliseconds by stage for chunk-refill frames vs cached-action frames.</p>
+        <canvas id="stageBarChart" width="540" height="300"></canvas>
+      </article>
+
+      <article class="chart-card">
+        <h2>Frame Type Counts</h2>
+        <p class="small">How many frames were slow chunk refills versus cheap cached-action frames.</p>
+        <canvas id="countChart" width="540" height="300"></canvas>
+      </article>
+
+      <article class="chart-card full">
+        <h2>Subprocess Timelines</h2>
+        <p class="small">Each chart shows one subprocess/stage over frame number.</p>
+        <canvas id="smallMultiples" width="1100" height="520"></canvas>
+      </article>
+    </section>
+
+    <section>
+      <h2>Interpretation</h2>
+      <table>
+        <tbody>
+          <tr>
+            <th>Pattern</th>
+            <td>
+              The run shows one expensive initial warmup/refill, then a repeating pattern of many cheap
+              cached-action frames followed by a roughly <code>45-55 ms</code> chunk refill.
+            </td>
+          </tr>
+          <tr>
+            <th>Camera and robot I/O</th>
+            <td>
+              <code>obs</code> stays near <code>1-2 ms</code> and <code>send</code> stays near
+              <code>0.1-0.2 ms</code>, so those are not the bottleneck in this log.
+            </td>
+          </tr>
+          <tr>
+            <th>MPS timing caveat</th>
+            <td>
+              With <code>LEROBOT_ROLLOUT_TIMING_SYNC_DEVICE=0</code>, MPS stage attribution is approximate.
+              Trust <code>loop</code> for end-to-end control timing; treat <code>policy</code> and
+              <code>post</code> split as a useful hint, not exact causality.
+            </td>
+          </tr>
+          <tr>
+            <th>Current diagnosis</th>
+            <td>
+              The system is generally fast enough between refills. The only frames over the 25 FPS budget
+              are ACT chunk refills, especially the first warmup frame.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const targetMs = 40;
+
+    const sampleLog = String.raw`
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=233.1ms hz=4.3/25.0 obs=1.2ms obs_proc=0.0ms engine=231.7ms inference=231.7ms policy=166.3ms pre=44.9ms post=14.1ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=4.9ms hz=204.8/25.0 obs=1.1ms obs_proc=0.1ms engine=3.5ms inference=3.5ms policy=0.3ms pre=0.1ms post=0.7ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=4.6ms hz=215.6/25.0 obs=1.2ms obs_proc=0.0ms engine=3.3ms inference=3.3ms policy=0.3ms pre=0.1ms post=0.7ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=5.0ms hz=201.4/25.0 obs=1.1ms obs_proc=0.0ms engine=3.7ms inference=3.7ms policy=0.3ms pre=0.1ms post=0.6ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=5.6ms hz=177.6/25.0 obs=1.2ms obs_proc=0.1ms engine=4.3ms inference=4.3ms policy=0.3ms pre=0.1ms post=1.1ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=5.5ms hz=181.2/25.0 obs=1.1ms obs_proc=0.0ms engine=4.2ms inference=4.2ms policy=0.3ms pre=0.1ms post=1.3ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.6ms hz=130.7/25.0 obs=1.2ms obs_proc=0.0ms engine=6.3ms inference=6.3ms policy=0.4ms pre=0.2ms post=2.6ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.7ms hz=129.4/25.0 obs=1.2ms obs_proc=0.0ms engine=6.3ms inference=6.3ms policy=0.4ms pre=0.1ms post=3.2ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=9.1ms hz=109.8/25.0 obs=1.3ms obs_proc=0.0ms engine=7.6ms inference=7.6ms policy=0.4ms pre=0.1ms post=3.4ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.0ms hz=143.8/25.0 obs=1.2ms obs_proc=0.0ms engine=5.6ms inference=5.6ms policy=0.4ms pre=0.2ms post=1.8ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.2ms hz=139.2/25.0 obs=1.2ms obs_proc=0.0ms engine=5.8ms inference=5.8ms policy=0.4ms pre=0.1ms post=2.2ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=8.4ms hz=119.1/25.0 obs=1.3ms obs_proc=0.1ms engine=6.7ms inference=6.7ms policy=0.4ms pre=0.2ms post=2.2ms send=0.2ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.7ms hz=130.5/25.0 obs=1.3ms obs_proc=0.0ms engine=6.0ms inference=6.0ms policy=0.5ms pre=0.2ms post=1.9ms send=0.3ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=8.6ms hz=116.4/25.0 obs=1.2ms obs_proc=0.0ms engine=7.1ms inference=7.1ms policy=0.4ms pre=0.1ms post=3.2ms send=0.1ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=9.3ms hz=107.7/25.0 obs=1.2ms obs_proc=0.0ms engine=7.8ms inference=7.8ms policy=0.3ms pre=0.2ms post=2.9ms send=0.2ms
+INFO 2026-05-17 14:55:33 ies/base.py:151 Rollout frame timing: source=model loop=7.8ms hz=127.5/25.0 obs=1.2ms obs_proc=0.1ms engine=6.3ms inference=6.2ms policy=0.4ms pre=0.1ms post=2.1ms send=0.2ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=52.9ms hz=18.9/25.0 obs=1.2ms obs_proc=0.0ms engine=51.5ms inference=51.5ms policy=13.2ms pre=0.1ms post=34.1ms send=0.1ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=4.7ms hz=211.3/25.0 obs=1.2ms obs_proc=0.0ms engine=3.4ms inference=3.4ms policy=0.4ms pre=0.1ms post=0.6ms send=0.1ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=5.0ms hz=199.1/25.0 obs=1.2ms obs_proc=0.0ms engine=3.7ms inference=3.7ms policy=0.4ms pre=0.1ms post=0.6ms send=0.1ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=5.7ms hz=174.7/25.0 obs=1.1ms obs_proc=0.0ms engine=4.5ms inference=4.5ms policy=0.4ms pre=0.2ms post=0.6ms send=0.1ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=6.3ms hz=159.5/25.0 obs=1.2ms obs_proc=0.0ms engine=4.9ms inference=4.9ms policy=0.4ms pre=0.2ms post=1.1ms send=0.1ms
+INFO 2026-05-17 14:55:34 ies/base.py:151 Rollout frame timing: source=model loop=7.0ms hz=143.7/25.0 obs=1.3ms obs_proc=0.1ms engine=5.4ms inference=5.4ms policy=0.4ms pre=0.1ms post=1.4ms send=0.2ms
+INFO 2026-05-17 14:55:35 ies/base.py:151 Rollout frame timing: source=model loop=46.6ms hz=21.5/25.0 obs=1.3ms obs_proc=0.0ms engine=45.1ms inference=45.0ms policy=13.2ms pre=0.2ms post=27.6ms send=0.1ms
+INFO 2026-05-17 14:55:36 ies/base.py:151 Rollout frame timing: source=model loop=53.7ms hz=18.6/25.0 obs=1.3ms obs_proc=0.0ms engine=52.1ms inference=52.1ms policy=12.6ms pre=0.2ms post=35.2ms send=0.1ms
+INFO 2026-05-17 14:55:38 ies/base.py:151 Rollout frame timing: source=model loop=46.9ms hz=21.3/25.0 obs=1.4ms obs_proc=0.0ms engine=45.3ms inference=45.3ms policy=13.3ms pre=0.1ms post=28.3ms send=0.1ms
+INFO 2026-05-17 14:55:39 ies/base.py:151 Rollout frame timing: source=model loop=55.2ms hz=18.1/25.0 obs=1.3ms obs_proc=0.0ms engine=53.7ms inference=53.7ms policy=13.7ms pre=0.2ms post=36.0ms send=0.1ms
+INFO 2026-05-17 14:55:40 ies/base.py:151 Rollout frame timing: source=model loop=50.8ms hz=19.7/25.0 obs=1.2ms obs_proc=0.0ms engine=49.4ms inference=49.3ms policy=13.1ms pre=0.2ms post=32.4ms send=0.1ms
+INFO 2026-05-17 14:55:41 ies/base.py:151 Rollout frame timing: source=model loop=47.0ms hz=21.3/25.0 obs=1.2ms obs_proc=0.0ms engine=45.6ms inference=45.5ms policy=12.5ms pre=0.2ms post=28.9ms send=0.1ms
+INFO 2026-05-17 14:55:42 ies/base.py:151 Rollout frame timing: source=model loop=54.8ms hz=18.2/25.0 obs=1.2ms obs_proc=0.1ms engine=53.4ms inference=53.4ms policy=13.0ms pre=0.2ms post=35.2ms send=0.1ms
+`;
+
+    const colors = {
+      refill: "#b42318",
+      cached: "#0f766e",
+      line: "#111827",
+      engine: "#2563eb",
+      policy: "#b45309",
+      post: "#6d28d9",
+      obs: "#475569",
+      send: "#0f766e",
+      prep: "#0891b2"
+    };
+
+    function parseFrames(text) {
+      const frames = [];
+      const lineRe = /Rollout frame timing:.*?loop=([\d.]+)ms.*?obs=([\d.]+)ms.*?obs_proc=([\d.]+)ms.*?engine=([\d.]+)ms.*?inference=([\d.]+)ms.*?policy=([\d.]+)ms.*?pre=([\d.]+)ms.*?post=([\d.]+)ms.*?send=([\d.]+)ms/g;
+      let match;
+      while ((match = lineRe.exec(text)) !== null) {
+        const frame = {
+          frame: frames.length + 1,
+          loop: Number(match[1]),
+          obs: Number(match[2]),
+          obsProc: Number(match[3]),
+          engine: Number(match[4]),
+          inference: Number(match[5]),
+          policy: Number(match[6]),
+          pre: Number(match[7]),
+          post: Number(match[8]),
+          send: Number(match[9])
+        };
+        frame.type = isChunkRefill(frame) ? "refill" : "cached";
+        frames.push(frame);
+      }
+      return frames;
+    }
+
+    function isChunkRefill(frame) {
+      return frame.loop > targetMs || frame.engine > targetMs || frame.policy > 10 || frame.post > 20;
+    }
+
+    function avg(items, key) {
+      if (!items.length) return 0;
+      return items.reduce((sum, item) => sum + item[key], 0) / items.length;
+    }
+
+    function percentile(values, p) {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+      return sorted[index];
+    }
+
+    function clearCanvas(canvas) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return ctx;
+    }
+
+    function axis(ctx, x, y, w, h, maxY, label) {
+      ctx.strokeStyle = "#d9dee3";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "#52616f";
+      ctx.font = "12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.fillText(label, x, y - 6);
+      ctx.fillText(`${maxY.toFixed(0)} ms`, x + 4, y + 14);
+      ctx.fillText("0", x + 4, y + h - 6);
+    }
+
+    function drawTimeline(frames) {
+      const canvas = document.getElementById("timelineChart");
+      const ctx = clearCanvas(canvas);
+      const pad = { left: 42, right: 18, top: 24, bottom: 28 };
+      const x = pad.left;
+      const y = pad.top;
+      const w = canvas.width - pad.left - pad.right;
+      const h = canvas.height - pad.top - pad.bottom;
+      const maxY = Math.max(70, Math.max(...frames.map(f => f.loop)) * 1.08);
+      axis(ctx, x, y, w, h, maxY, "loop duration by frame");
+
+      const barW = Math.max(2, w / frames.length);
+      frames.forEach((frame, i) => {
+        const bh = (frame.loop / maxY) * h;
+        ctx.fillStyle = frame.type === "refill" ? colors.refill : colors.cached;
+        ctx.fillRect(x + i * barW, y + h - bh, Math.max(1, barW - 1), bh);
+      });
+
+      const targetY = y + h - (targetMs / maxY) * h;
+      ctx.strokeStyle = colors.line;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, targetY);
+      ctx.lineTo(x + w, targetY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = colors.line;
+      ctx.fillText("40 ms target", x + w - 86, targetY - 6);
+    }
+
+    function drawStageBars(frames) {
+      const canvas = document.getElementById("stageBarChart");
+      const ctx = clearCanvas(canvas);
+      const groups = [
+        { name: "chunk refill", items: frames.filter(f => f.type === "refill") },
+        { name: "cached action", items: frames.filter(f => f.type === "cached") }
+      ];
+      const stages = [
+        ["obs", "obs", colors.obs],
+        ["engine", "engine", colors.engine],
+        ["policy", "policy", colors.policy],
+        ["post", "post", colors.post],
+        ["send", "send", colors.send]
+      ];
+      const maxY = Math.max(1, ...groups.flatMap(g => stages.map(s => avg(g.items, s[0])))) * 1.25;
+      const pad = { left: 46, right: 12, top: 22, bottom: 54 };
+      const x = pad.left;
+      const y = pad.top;
+      const w = canvas.width - pad.left - pad.right;
+      const h = canvas.height - pad.top - pad.bottom;
+      axis(ctx, x, y, w, h, maxY, "average stage ms");
+
+      const groupW = w / groups.length;
+      const barW = groupW / (stages.length + 1);
+      groups.forEach((group, gi) => {
+        stages.forEach((stage, si) => {
+          const value = avg(group.items, stage[0]);
+          const bh = (value / maxY) * h;
+          const bx = x + gi * groupW + (si + 0.5) * barW;
+          ctx.fillStyle = stage[2];
+          ctx.fillRect(bx, y + h - bh, barW * 0.72, bh);
+        });
+        ctx.fillStyle = "#52616f";
+        ctx.fillText(group.name, x + gi * groupW + 10, y + h + 22);
+      });
+
+      ctx.fillStyle = "#52616f";
+      stages.forEach((stage, i) => ctx.fillText(stage[1], x + 6 + i * 58, canvas.height - 8));
+    }
+
+    function drawCountChart(frames) {
+      const canvas = document.getElementById("countChart");
+      const ctx = clearCanvas(canvas);
+      const refill = frames.filter(f => f.type === "refill").length;
+      const cached = frames.length - refill;
+      const total = Math.max(1, frames.length);
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2 + 8;
+      const r = 86;
+      const refillAngle = (refill / total) * Math.PI * 2;
+      ctx.lineWidth = 42;
+      ctx.strokeStyle = colors.cached;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = colors.refill;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + refillAngle);
+      ctx.stroke();
+      ctx.fillStyle = "#1f2933";
+      ctx.font = "700 34px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(`${Math.round((cached / total) * 100)}%`, cx, cy - 2);
+      ctx.font = "13px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.fillStyle = "#52616f";
+      ctx.fillText("cached-action frames", cx, cy + 22);
+      ctx.textAlign = "left";
+      ctx.fillStyle = colors.refill;
+      ctx.fillText(`chunk refill: ${refill}`, 22, 28);
+      ctx.fillStyle = colors.cached;
+      ctx.fillText(`cached action: ${cached}`, 22, 48);
+    }
+
+    function drawSmallMultiples(frames) {
+      const canvas = document.getElementById("smallMultiples");
+      const ctx = clearCanvas(canvas);
+      const series = [
+        ["engine", colors.engine],
+        ["policy", colors.policy],
+        ["post", colors.post],
+        ["obs", colors.obs],
+        ["obsProc", colors.prep],
+        ["send", colors.send]
+      ];
+      const cols = 2;
+      const rows = 3;
+      const cellW = canvas.width / cols;
+      const cellH = canvas.height / rows;
+      series.forEach(([key, color], index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const x = col * cellW + 44;
+        const y = row * cellH + 24;
+        const w = cellW - 62;
+        const h = cellH - 48;
+        const maxY = Math.max(1, Math.max(...frames.map(f => f[key]))) * 1.15;
+        axis(ctx, x, y, w, h, maxY, key);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        frames.forEach((frame, i) => {
+          const px = x + (i / Math.max(1, frames.length - 1)) * w;
+          const py = y + h - (frame[key] / maxY) * h;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      });
+    }
+
+    function renderSummary(frames) {
+      const refills = frames.filter(f => f.type === "refill");
+      const cached = frames.filter(f => f.type === "cached");
+      const warmRefills = refills.slice(1);
+      const cards = [
+        ["Frames parsed", frames.length],
+        ["Chunk refills", refills.length],
+        ["Avg cached frame", `${avg(cached, "loop").toFixed(1)} ms`],
+        ["Avg warm refill", `${avg(warmRefills.length ? warmRefills : refills, "loop").toFixed(1)} ms`],
+        ["p95 cached frame", `${percentile(cached.map(f => f.loop), 95).toFixed(1)} ms`],
+        ["Max frame", `${Math.max(...frames.map(f => f.loop)).toFixed(1)} ms`],
+        ["Avg obs read", `${avg(frames, "obs").toFixed(1)} ms`],
+        ["Avg send", `${avg(frames, "send").toFixed(1)} ms`]
+      ];
+      document.getElementById("summaryCards").innerHTML = cards.map(([label, value]) => `
+        <div class="card"><span>${label}</span><strong>${value}</strong></div>
+      `).join("");
+    }
+
+    function render() {
+      const frames = parseFrames(document.getElementById("logInput").value);
+      if (!frames.length) {
+        alert("No frame timing lines found. Paste lines containing 'Rollout frame timing:'.");
+        return;
+      }
+      renderSummary(frames);
+      drawTimeline(frames);
+      drawStageBars(frames);
+      drawCountChart(frames);
+      drawSmallMultiples(frames);
+    }
+
+    document.getElementById("renderButton").addEventListener("click", render);
+    document.getElementById("sampleButton").addEventListener("click", () => {
+      document.getElementById("logInput").value = sampleLog.trim();
+      render();
+    });
+    document.getElementById("logInput").value = sampleLog.trim();
+    render();
+  </script>
+</body>
+</html>
