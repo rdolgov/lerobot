@@ -1,6 +1,6 @@
-# Wheel-only LeKiwi base setup/test
+# LeKiwi setup/test notes
 
-Use this when the LeKiwi mobile base is assembled but the arm is not connected yet.
+Use the wheel-only sections when the LeKiwi mobile base is assembled but the arm is not connected yet.
 
 Do not use the stock `lerobot-setup-motors --robot.type=lekiwi` path for a wheel-only build. That path expects the arm motors too.
 
@@ -209,3 +209,112 @@ python my-scripts/kiwi-scripts/kiwi-wheel-only.py keyboard \
   --port "$PORT" \
   --deadman-timeout 0
 ```
+
+## Full wired LeKiwi calibration
+
+Use this after the full LeKiwi robot is assembled: follower arm, wheel base, and separate leader arm.
+
+For the wired version, run with cameras disabled first on macOS because the default LeKiwi camera paths are Linux paths like `/dev/video0`.
+
+Calibrate the LeKiwi robot/base/follower board:
+
+```bash
+lerobot-calibrate \
+  --robot.type=lekiwi \
+  --robot.port="$ROBOT_PORT" \
+  --robot.id=my_awesome_kiwi \
+  --robot.cameras='{}'
+```
+
+Calibrate the leader arm separately:
+
+```bash
+lerobot-calibrate \
+  --teleop.type=so100_leader \
+  --teleop.port="$LEADER_PORT" \
+  --teleop.id=my_awesome_leader_arm
+```
+
+The ports must be different:
+
+- `ROBOT_PORT`: LeKiwi base/follower motor board.
+- `LEADER_PORT`: separate SO100/SO101 leader arm board.
+
+Use `lerobot-find-port` for each board. When prompted, unplug the board you are trying to identify.
+
+## Full wired LeKiwi teleoperation
+
+LeKiwi teleoperation uses two software roles even when everything is wired to one laptop.
+
+The host owns the LeKiwi robot USB port and talks directly to the follower arm and wheel motors:
+
+```bash
+python -m lerobot.robots.lekiwi.lekiwi_host \
+  --robot.id=my_awesome_kiwi \
+  --robot.port="$ROBOT_PORT" \
+  --robot.cameras='{}' \
+  --host.connection_time_s=3600
+```
+
+The teleop client reads the leader arm and keyboard, then sends commands to the host over localhost:
+
+```bash
+LEKIWI_REMOTE_IP=127.0.0.1 \
+LEKIWI_ROBOT_ID=my_awesome_kiwi \
+LEKIWI_LEADER_PORT="$LEADER_PORT" \
+LEKIWI_LEADER_ID=my_awesome_leader_arm \
+LEKIWI_DISABLE_CAMERAS=1 \
+python examples/lekiwi/teleoperate.py
+```
+
+The data flow is:
+
+```text
+leader arm + keyboard
+        -> examples/lekiwi/teleoperate.py
+        -> ZMQ on localhost:5555/5556
+        -> lekiwi_host
+        -> USB serial
+        -> LeKiwi follower arm + wheels
+```
+
+The repeated host warning `No command available` is normal before the client starts. The watchdog stops the base if commands stop arriving for more than `500ms`.
+
+Control keys:
+
+- Hold `w`: forward
+- Hold `s`: backward
+- Hold `a`: left
+- Hold `d`: right
+- Hold `z`: rotate left
+- Hold `x`: rotate right
+- Press `r`: speed up
+- Press `f`: speed down
+
+Move the physical leader arm to move the follower arm. Start with the base lifted for the first test.
+
+## One-command local launcher
+
+After both the LeKiwi robot and leader arm are calibrated, this helper starts the host in the background and then starts the teleop client:
+
+```bash
+./my-scripts/kiwi-scripts/lekiwi-local-teleop.sh "$ROBOT_PORT" "$LEADER_PORT"
+```
+
+Or with environment variables:
+
+```bash
+KIWI_ROBOT_PORT=/dev/tty.usbmodem5B610338241 \
+KIWI_LEADER_PORT=/dev/tty.usbmodem5AE60574511 \
+./my-scripts/kiwi-scripts/lekiwi-local-teleop.sh
+```
+
+Optional overrides:
+
+```bash
+KIWI_ROBOT_ID=my_awesome_kiwi
+KIWI_LEADER_ID=my_awesome_leader_arm
+KIWI_HOST_TIME_S=3600
+```
+
+The launcher sends one newline to the host so it uses the saved robot calibration file automatically. If the robot has not been calibrated yet, run the calibration command first.

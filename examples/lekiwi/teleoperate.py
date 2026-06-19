@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
@@ -27,8 +28,17 @@ FPS = 30
 
 def main():
     # Create the robot and teleoperator configurations
-    robot_config = LeKiwiClientConfig(remote_ip="172.18.134.136", id="my_lekiwi")
-    teleop_arm_config = SO100LeaderConfig(port="/dev/tty.usbmodem585A0077581", id="my_awesome_leader_arm")
+    robot_config_kwargs = {
+        "remote_ip": os.environ.get("LEKIWI_REMOTE_IP", "127.0.0.1"),
+        "id": os.environ.get("LEKIWI_ROBOT_ID", "my_awesome_kiwi"),
+    }
+    if os.environ.get("LEKIWI_DISABLE_CAMERAS", "1").lower() not in {"0", "false", "no"}:
+        robot_config_kwargs["cameras"] = {}
+    robot_config = LeKiwiClientConfig(**robot_config_kwargs)
+    teleop_arm_config = SO100LeaderConfig(
+        port=os.environ.get("LEKIWI_LEADER_PORT", "/dev/tty.usbmodem5AE60574511"),
+        id=os.environ.get("LEKIWI_LEADER_ID", "my_awesome_leader_arm"),
+    )
     keyboard_config = KeyboardTeleopConfig(id="my_laptop_keyboard")
 
     # Initialize the robot and teleoperator

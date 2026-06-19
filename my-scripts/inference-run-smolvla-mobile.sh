@@ -12,7 +12,7 @@ lerobot-rollout \
   --robot.port=/dev/tty.usbmodem5B610340181\
   --robot.cameras="{ top: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 25}, front: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 25}}" \
   --robot.id=my_awesome_mobile_arm \
-  --display_data=false \
+  --display_data=true \
   --policy.device=mps \
   --fps=30 \
   --task="Grab the red ring may 16" \
