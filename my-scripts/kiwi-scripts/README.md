@@ -307,6 +307,11 @@ Or with environment variables:
 KIWI_ROBOT_PORT=/dev/tty.usbmodem5B610338241 \
 KIWI_LEADER_PORT=/dev/tty.usbmodem5AE60574511 \
 ./my-scripts/kiwi-scripts/lekiwi-local-teleop.sh
+
+KIWI_ROBOT_PORT=/dev/tty.usbmodem5B610338241 \
+KIWI_LEADER_PORT=/dev/tty.usbmodem5AE60574511 \
+./lekiwi-local-teleop.sh
+
 ```
 
 Optional overrides:
