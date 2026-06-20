@@ -24,12 +24,16 @@ from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 FPS = 30
+DEFAULT_REMOTE_IP = "pi5-robot.local"
 
 
 def main():
     # Create the robot and teleoperator configurations
     robot_config_kwargs = {
-        "remote_ip": os.environ.get("LEKIWI_REMOTE_IP", "127.0.0.1"),
+        "remote_ip": os.environ.get("LEKIWI_REMOTE_IP", DEFAULT_REMOTE_IP),
+        "port_zmq_cmd": int(os.environ.get("LEKIWI_PORT_ZMQ_CMD", "5555")),
+        "port_zmq_observations": int(os.environ.get("LEKIWI_PORT_ZMQ_OBSERVATIONS", "5556")),
+        "connect_timeout_s": int(os.environ.get("LEKIWI_CONNECT_TIMEOUT_S", "5")),
         "id": os.environ.get("LEKIWI_ROBOT_ID", "my_awesome_kiwi"),
     }
     if os.environ.get("LEKIWI_DISABLE_CAMERAS", "1").lower() not in {"0", "false", "no"}:
