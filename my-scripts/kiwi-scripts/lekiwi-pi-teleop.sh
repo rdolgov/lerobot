@@ -22,9 +22,11 @@ Defaults:
   KIWI_ROBOT_PORT=/dev/ttyACM0
   KIWI_LOCAL_CONDA_ENV=lerobot-fork
   KIWI_ENABLE_CAMERAS=0
-  KIWI_CAMERA_PATH=/dev/video0
+  KIWI_FRONT_CAMERA_PATH=/dev/video0
+  KIWI_WRIST_CAMERA_PATH=/dev/video2
   KIWI_CAMERA_FOURCC=MJPG
   KIWI_CAMERA_BACKEND=200
+  KIWI_STOP_EXISTING_HOST=1
 
 The Pi must accept key-based SSH from this laptop so the launcher can start and
 stop the remote LeKiwi host non-interactively.
@@ -56,19 +58,35 @@ HOST_TIME_S="${KIWI_HOST_TIME_S:-3600}"
 HOST_START_TIMEOUT_S="${KIWI_HOST_START_TIMEOUT_S:-30}"
 PORT_ZMQ_CMD="${KIWI_PORT_ZMQ_CMD:-5555}"
 PORT_ZMQ_OBSERVATIONS="${KIWI_PORT_ZMQ_OBSERVATIONS:-5556}"
+STOP_EXISTING_HOST="${KIWI_STOP_EXISTING_HOST:-1}"
 DISABLE_CAMERAS="${KIWI_DISABLE_CAMERAS:-1}"
 ENABLE_CAMERAS="${KIWI_ENABLE_CAMERAS:-0}"
 LOCAL_CONDA_ENV="${KIWI_LOCAL_CONDA_ENV:-lerobot-fork}"
 LOCAL_PYTHON="${KIWI_LOCAL_PYTHON:-}"
-CAMERA_NAME="${KIWI_CAMERA_NAME:-front}"
-CAMERA_PATH="${KIWI_CAMERA_PATH:-/dev/video0}"
-CAMERA_WIDTH="${KIWI_CAMERA_WIDTH:-640}"
-CAMERA_HEIGHT="${KIWI_CAMERA_HEIGHT:-480}"
-CAMERA_FPS="${KIWI_CAMERA_FPS:-30}"
 CAMERA_FOURCC="${KIWI_CAMERA_FOURCC:-MJPG}"
 CAMERA_BACKEND="${KIWI_CAMERA_BACKEND:-200}"
-CAMERA_ROTATION="${KIWI_CAMERA_ROTATION:-0}"
-CAMERA_WARMUP_S="${KIWI_CAMERA_WARMUP_S:-2}"
+
+ENABLE_FRONT_CAMERA="${KIWI_ENABLE_FRONT_CAMERA:-1}"
+FRONT_CAMERA_NAME="${KIWI_FRONT_CAMERA_NAME:-${KIWI_CAMERA_NAME:-front}}"
+FRONT_CAMERA_PATH="${KIWI_FRONT_CAMERA_PATH:-${KIWI_CAMERA_PATH:-/dev/video0}}"
+FRONT_CAMERA_WIDTH="${KIWI_FRONT_CAMERA_WIDTH:-${KIWI_CAMERA_WIDTH:-640}}"
+FRONT_CAMERA_HEIGHT="${KIWI_FRONT_CAMERA_HEIGHT:-${KIWI_CAMERA_HEIGHT:-480}}"
+FRONT_CAMERA_FPS="${KIWI_FRONT_CAMERA_FPS:-${KIWI_CAMERA_FPS:-30}}"
+FRONT_CAMERA_FOURCC="${KIWI_FRONT_CAMERA_FOURCC:-$CAMERA_FOURCC}"
+FRONT_CAMERA_BACKEND="${KIWI_FRONT_CAMERA_BACKEND:-$CAMERA_BACKEND}"
+FRONT_CAMERA_ROTATION="${KIWI_FRONT_CAMERA_ROTATION:-${KIWI_CAMERA_ROTATION:-0}}"
+FRONT_CAMERA_WARMUP_S="${KIWI_FRONT_CAMERA_WARMUP_S:-${KIWI_CAMERA_WARMUP_S:-2}}"
+
+ENABLE_WRIST_CAMERA="${KIWI_ENABLE_WRIST_CAMERA:-1}"
+WRIST_CAMERA_NAME="${KIWI_WRIST_CAMERA_NAME:-wrist}"
+WRIST_CAMERA_PATH="${KIWI_WRIST_CAMERA_PATH:-/dev/video2}"
+WRIST_CAMERA_WIDTH="${KIWI_WRIST_CAMERA_WIDTH:-480}"
+WRIST_CAMERA_HEIGHT="${KIWI_WRIST_CAMERA_HEIGHT:-640}"
+WRIST_CAMERA_FPS="${KIWI_WRIST_CAMERA_FPS:-30}"
+WRIST_CAMERA_FOURCC="${KIWI_WRIST_CAMERA_FOURCC:-$CAMERA_FOURCC}"
+WRIST_CAMERA_BACKEND="${KIWI_WRIST_CAMERA_BACKEND:-$CAMERA_BACKEND}"
+WRIST_CAMERA_ROTATION="${KIWI_WRIST_CAMERA_ROTATION:-90}"
+WRIST_CAMERA_WARMUP_S="${KIWI_WRIST_CAMERA_WARMUP_S:-2}"
 
 case "$ENABLE_CAMERAS" in
   1|true|True|TRUE|yes|Yes|YES)
@@ -131,14 +149,72 @@ REMOTE_ROBOT_PORT="$(shell_quote "$ROBOT_PORT")"
 REMOTE_HOST_TIME_S="$(shell_quote "$HOST_TIME_S")"
 REMOTE_PORT_ZMQ_CMD="$(shell_quote "$PORT_ZMQ_CMD")"
 REMOTE_PORT_ZMQ_OBSERVATIONS="$(shell_quote "$PORT_ZMQ_OBSERVATIONS")"
-REMOTE_CAMERA_PATH="$(shell_quote "$CAMERA_PATH")"
-REMOTE_CAMERA_BACKEND="$(shell_quote "$CAMERA_BACKEND")"
-REMOTE_CAMERA_FOURCC="$(shell_quote "$CAMERA_FOURCC")"
+
+camera_entry() {
+  local name="$1"
+  local path="$2"
+  local width="$3"
+  local height="$4"
+  local fps="$5"
+  local fourcc="$6"
+  local backend="$7"
+  local rotation="$8"
+  local warmup_s="$9"
+  printf "%s: {type: opencv, index_or_path: %s, width: %s, height: %s, fps: %s, fourcc: %s, backend: %s, rotation: %s, warmup_s: %s}" \
+    "$name" "$path" "$width" "$height" "$fps" "$fourcc" "$backend" "$rotation" "$warmup_s"
+}
+
+make_camera_preflight_cmd() {
+  local path="$1"
+  local width="$2"
+  local height="$3"
+  local fps="$4"
+  local fourcc="$5"
+  local backend="$6"
+  local remote_path remote_width remote_height remote_fps remote_fourcc remote_backend
+  remote_path="$(shell_quote "$path")"
+  remote_width="$(shell_quote "$width")"
+  remote_height="$(shell_quote "$height")"
+  remote_fps="$(shell_quote "$fps")"
+  remote_fourcc="$(shell_quote "$fourcc")"
+  remote_backend="$(shell_quote "$backend")"
+  printf "set -eu; test -e %s; CAMERA_PATH=%s CAMERA_WIDTH=%s CAMERA_HEIGHT=%s CAMERA_FPS=%s CAMERA_FOURCC=%s CAMERA_BACKEND=%s %s -c 'import cv2, os, time; path=os.environ[\"CAMERA_PATH\"]; width=float(os.environ[\"CAMERA_WIDTH\"]); height=float(os.environ[\"CAMERA_HEIGHT\"]); fps=float(os.environ[\"CAMERA_FPS\"]); fourcc=os.environ[\"CAMERA_FOURCC\"]; backend=int(os.environ[\"CAMERA_BACKEND\"]); cap=cv2.VideoCapture(path, backend); cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc)); cap.set(cv2.CAP_PROP_FRAME_WIDTH, width); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height); cap.set(cv2.CAP_PROP_FPS, fps); time.sleep(1); ok, frame = cap.read(); cap.release(); assert ok and frame is not None, \"no frame\"; print(f\"camera ok: {path} {frame.shape}\")'" \
+    "$remote_path" "$remote_path" "$remote_width" "$remote_height" "$remote_fps" "$remote_fourcc" "$remote_backend" "$REMOTE_PYTHON"
+}
+
+camera_enabled() {
+  case "$1" in
+    1|true|True|TRUE|yes|Yes|YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 REMOTE_CAMERA_ARGS=""
+CAMERA_PREFLIGHTS=()
 case "$DISABLE_CAMERAS" in
   0|false|False|FALSE|no|No|NO)
-    CAMERA_CONFIG="{$CAMERA_NAME: {type: opencv, index_or_path: $CAMERA_PATH, width: $CAMERA_WIDTH, height: $CAMERA_HEIGHT, fps: $CAMERA_FPS, fourcc: $CAMERA_FOURCC, backend: $CAMERA_BACKEND, rotation: $CAMERA_ROTATION, warmup_s: $CAMERA_WARMUP_S}}"
+    CAMERA_ENTRIES=()
+    if camera_enabled "$ENABLE_FRONT_CAMERA"; then
+      CAMERA_ENTRIES+=("$(camera_entry "$FRONT_CAMERA_NAME" "$FRONT_CAMERA_PATH" "$FRONT_CAMERA_WIDTH" "$FRONT_CAMERA_HEIGHT" "$FRONT_CAMERA_FPS" "$FRONT_CAMERA_FOURCC" "$FRONT_CAMERA_BACKEND" "$FRONT_CAMERA_ROTATION" "$FRONT_CAMERA_WARMUP_S")")
+      CAMERA_PREFLIGHTS+=("$FRONT_CAMERA_NAME|$FRONT_CAMERA_PATH|$FRONT_CAMERA_WIDTH|$FRONT_CAMERA_HEIGHT|$FRONT_CAMERA_FPS|$FRONT_CAMERA_FOURCC|$FRONT_CAMERA_BACKEND")
+    fi
+    if camera_enabled "$ENABLE_WRIST_CAMERA"; then
+      CAMERA_ENTRIES+=("$(camera_entry "$WRIST_CAMERA_NAME" "$WRIST_CAMERA_PATH" "$WRIST_CAMERA_WIDTH" "$WRIST_CAMERA_HEIGHT" "$WRIST_CAMERA_FPS" "$WRIST_CAMERA_FOURCC" "$WRIST_CAMERA_BACKEND" "$WRIST_CAMERA_ROTATION" "$WRIST_CAMERA_WARMUP_S")")
+      CAMERA_PREFLIGHTS+=("$WRIST_CAMERA_NAME|$WRIST_CAMERA_PATH|$WRIST_CAMERA_WIDTH|$WRIST_CAMERA_HEIGHT|$WRIST_CAMERA_FPS|$WRIST_CAMERA_FOURCC|$WRIST_CAMERA_BACKEND")
+    fi
+    if [[ "${#CAMERA_ENTRIES[@]}" -eq 0 ]]; then
+      echo "KIWI_ENABLE_CAMERAS is set, but no cameras are enabled." >&2
+      exit 2
+    fi
+    CAMERA_CONFIG="{${CAMERA_ENTRIES[0]}"
+    for ((i = 1; i < ${#CAMERA_ENTRIES[@]}; i++)); do
+      CAMERA_CONFIG="$CAMERA_CONFIG, ${CAMERA_ENTRIES[$i]}"
+    done
+    CAMERA_CONFIG="$CAMERA_CONFIG}"
     REMOTE_CAMERA_CONFIG="$(shell_quote "$CAMERA_CONFIG")"
     REMOTE_CAMERA_ARGS=" --robot.cameras=$REMOTE_CAMERA_CONFIG"
     ;;
@@ -148,7 +224,8 @@ case "$DISABLE_CAMERAS" in
 esac
 
 REMOTE_PREFLIGHT_CMD="set -eu; test -d $REMOTE_REPO_DIR; test -x $REMOTE_PYTHON; PYTHONPATH=$REMOTE_SRC_DIR $REMOTE_PYTHON -c 'import lerobot; import zmq'"
-REMOTE_CAMERA_PREFLIGHT_CMD="set -eu; test -e $REMOTE_CAMERA_PATH; $REMOTE_PYTHON -c 'import cv2, time; cap=cv2.VideoCapture(\"$CAMERA_PATH\", int(\"$CAMERA_BACKEND\")); cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*\"$CAMERA_FOURCC\")); cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(\"$CAMERA_WIDTH\")); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(\"$CAMERA_HEIGHT\")); cap.set(cv2.CAP_PROP_FPS, float(\"$CAMERA_FPS\")); time.sleep(1); ok, frame = cap.read(); cap.release(); assert ok and frame is not None, \"no frame\"; print(f\"camera ok: {frame.shape}\")'"
+REMOTE_FIND_HOSTS_CMD='pgrep -af "lerobot[.]robots[.]lekiwi[.]lekiwi_host" || true'
+REMOTE_STOP_HOSTS_CMD='pids=$(pgrep -f "lerobot[.]robots[.]lekiwi[.]lekiwi_host" || true); if [ -n "$pids" ]; then echo "Stopping existing LeKiwi host PIDs: $pids"; kill $pids; sleep 1; fi'
 REMOTE_CMD="set -eu; cd $REMOTE_REPO_DIR; printf '\\n' | PYTHONPATH=$REMOTE_SRC_DIR $REMOTE_PYTHON -m lerobot.robots.lekiwi.lekiwi_host --robot.id=$REMOTE_ROBOT_ID --robot.port=$REMOTE_ROBOT_PORT$REMOTE_CAMERA_ARGS --host.connection_time_s=$REMOTE_HOST_TIME_S --host.port_zmq_cmd=$REMOTE_PORT_ZMQ_CMD --host.port_zmq_observations=$REMOTE_PORT_ZMQ_OBSERVATIONS"
 
 HOST_SSH_PID=""
@@ -186,31 +263,59 @@ EOF
   exit 1
 fi
 
+existing_hosts="$(ssh "${SSH_OPTS[@]}" "$PI_TARGET" "$REMOTE_FIND_HOSTS_CMD")"
+if [[ -n "$existing_hosts" ]]; then
+  case "$STOP_EXISTING_HOST" in
+    1|true|True|TRUE|yes|Yes|YES)
+      echo "Existing LeKiwi host found on $PI_TARGET:"
+      echo "$existing_hosts"
+      ssh "${SSH_OPTS[@]}" "$PI_TARGET" "$REMOTE_STOP_HOSTS_CMD"
+      ;;
+    *)
+      cat >&2 <<EOF
+An existing LeKiwi host is already running on $PI_TARGET:
+$existing_hosts
+
+Stop it first, or let this launcher stop stale hosts automatically:
+  KIWI_STOP_EXISTING_HOST=1 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+EOF
+      exit 1
+      ;;
+  esac
+fi
+
 case "$DISABLE_CAMERAS" in
   0|false|False|FALSE|no|No|NO)
-    echo "Checking Pi camera $CAMERA_PATH with backend $CAMERA_BACKEND and fourcc $CAMERA_FOURCC..."
-    if ! ssh "${SSH_OPTS[@]}" "$PI_TARGET" "$REMOTE_CAMERA_PREFLIGHT_CMD"; then
-      cat >&2 <<EOF
+    for camera_spec in "${CAMERA_PREFLIGHTS[@]}"; do
+      IFS="|" read -r camera_name camera_path camera_width camera_height camera_fps camera_fourcc camera_backend <<<"$camera_spec"
+      echo "Checking Pi camera '$camera_name' at $camera_path with backend $camera_backend and fourcc $camera_fourcc..."
+      remote_camera_preflight_cmd="$(make_camera_preflight_cmd "$camera_path" "$camera_width" "$camera_height" "$camera_fps" "$camera_fourcc" "$camera_backend")"
+      if ! ssh "${SSH_OPTS[@]}" "$PI_TARGET" "$remote_camera_preflight_cmd"; then
+        remote_camera_path="$(shell_quote "$camera_path")"
+        ssh "${SSH_OPTS[@]}" "$PI_TARGET" "fuser -v $remote_camera_path 2>&1 || true; pgrep -af 'lerobot[.]robots[.]lekiwi[.]lekiwi_host' || true" >&2 || true
+        cat >&2 <<EOF
 Pi camera preflight failed.
 
 Current camera config:
-  name:    $CAMERA_NAME
-  path:    $CAMERA_PATH
-  width:   $CAMERA_WIDTH
-  height:  $CAMERA_HEIGHT
-  fps:     $CAMERA_FPS
-  fourcc:  $CAMERA_FOURCC
-  backend: $CAMERA_BACKEND
+  name:    $camera_name
+  path:    $camera_path
+  width:   $camera_width
+  height:  $camera_height
+  fps:     $camera_fps
+  fourcc:  $camera_fourcc
+  backend: $camera_backend
 
 Check devices:
   ssh $PI_TARGET 'v4l2-ctl --list-devices'
-  ssh $PI_TARGET 'v4l2-ctl --device=$CAMERA_PATH --list-formats-ext'
+  ssh $PI_TARGET 'v4l2-ctl --device=$camera_path --list-formats-ext'
+  ssh $PI_TARGET 'fuser -v $camera_path'
 
 Or run without cameras:
   KIWI_ENABLE_CAMERAS=0 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
 EOF
-      exit 1
-    fi
+        exit 1
+      fi
+    done
     ;;
 esac
 
