@@ -323,3 +323,183 @@ KIWI_HOST_TIME_S=3600
 ```
 
 The launcher sends one newline to the host so it uses the saved robot calibration file automatically. If the robot has not been calibrated yet, run the calibration command first.
+
+## Raspberry Pi LeKiwi teleoperation
+
+For the Pi-mounted robot, the laptop runs the leader arm + keyboard client, and the Raspberry Pi runs the LeKiwi host that owns the robot USB port.
+
+One command starts the host over SSH, waits for the host ports, then starts the local teleop client:
+
+```bash
+./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+Current defaults:
+
+```bash
+KIWI_LEADER_PORT=/dev/tty.usbmodem5AE60574511
+KIWI_PI_USER=robot
+KIWI_PI_HOST=pi5-robot.local
+KIWI_PI_REPO_DIR=/home/robot/dev/lerobot
+KIWI_PI_PYTHON=/home/robot/miniforge3/envs/lerobot-fork/bin/python
+KIWI_ROBOT_PORT=/dev/ttyACM0
+KIWI_LOCAL_CONDA_ENV=lerobot-fork
+KIWI_ENABLE_CAMERAS=0
+KIWI_FRONT_CAMERA_PATH=/dev/video0
+KIWI_WRIST_CAMERA_PATH=/dev/video2
+KIWI_CAMERA_FOURCC=MJPG
+KIWI_CAMERA_BACKEND=200
+KIWI_STOP_EXISTING_HOST=1
+KIWI_ROBOT_ID=my_awesome_kiwi
+KIWI_LEADER_ID=my_awesome_leader_arm
+KIWI_HOST_TIME_S=3600
+```
+
+If your Pi uses a different checkout or Python environment, override the paths:
+
+```bash
+KIWI_PI_REPO_DIR=/home/robot/dev/lerobot \
+KIWI_PI_PYTHON=/home/robot/miniforge3/envs/lerobot/bin/python \
+./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+The launcher requires key-based SSH because it starts the remote host non-interactively and stops it when teleop exits:
+
+```bash
+ssh robot@pi5-robot.local
+ssh-copy-id robot@pi5-robot.local
+```
+
+If a previous run left `lekiwi_host` running on the Pi, it can keep ZMQ ports and camera devices open. The launcher stops existing `lerobot.robots.lekiwi.lekiwi_host` processes by default before starting a new one. To disable that behavior:
+
+```bash
+KIWI_STOP_EXISTING_HOST=0 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+The signal flow is:
+
+```text
+Mac laptop
+  leader arm USB + keyboard
+        |
+        v
+  examples/lekiwi/teleoperate.py
+        |
+        |  ZMQ PUSH actions on tcp://pi5-robot.local:5555
+        |  ZMQ PULL observations on tcp://pi5-robot.local:5556
+        v
+Raspberry Pi
+  lerobot.robots.lekiwi.lekiwi_host
+        |
+        |  USB serial /dev/ttyACM0
+        v
+LeKiwi robot
+  follower arm + wheel base
+```
+
+The two network channels are ZeroMQ sockets:
+
+- `5555`: laptop client pushes action messages to the Pi host.
+- `5556`: Pi host pushes observation messages back to the laptop client.
+
+Both sockets use `ZMQ_CONFLATE`, so they behave like a one-item latest-value queue rather than an ever-growing queue. If messages arrive faster than the receiver reads them, older queued messages are dropped and only the newest command or observation is kept. This is intentional for teleoperation because stale robot commands are worse than skipped intermediate commands.
+
+The Pi host also has a watchdog. If no command is received for more than `500ms`, it stops the mobile base.
+
+### Camera view in Rerun
+
+By default, the launcher disables cameras because it is the fastest smoke-test path. To see the Pi cameras in Rerun, enable cameras:
+
+```bash
+KIWI_ENABLE_CAMERAS=1 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+This starts the Pi host with two tested USB camera configs, matching the normal LeKiwi `front` + `wrist` setup:
+
+- `front`: `/dev/video0`, 640x480, 30 FPS
+- `wrist`: `/dev/video2`, output 480x640, 30 FPS, rotated 90 degrees
+- `fourcc`: `MJPG`
+- `backend`: `200` (`cv2.CAP_V4L2`)
+
+Those settings matter on the Raspberry Pi. On this Pi, `/dev/video0` and `/dev/video2` are the real USB webcam capture nodes. `/dev/video1` and `/dev/video3` are UVC metadata nodes, not camera streams. The launcher replaces the default LeKiwi camera config with explicit V4L2/MJPG settings for both cameras when `KIWI_ENABLE_CAMERAS=1`.
+
+The Pi reads the camera frames, JPEG-encodes them, and sends them over the observation ZMQ channel on port `5556`. The laptop decodes them and `examples/lekiwi/teleoperate.py` logs them to the Rerun viewer as image observations.
+
+Camera overrides:
+
+```bash
+KIWI_ENABLE_CAMERAS=1 \
+KIWI_FRONT_CAMERA_PATH=/dev/video0 \
+KIWI_FRONT_CAMERA_WIDTH=640 \
+KIWI_FRONT_CAMERA_HEIGHT=480 \
+KIWI_FRONT_CAMERA_ROTATION=0 \
+KIWI_WRIST_CAMERA_PATH=/dev/video2 \
+KIWI_WRIST_CAMERA_WIDTH=480 \
+KIWI_WRIST_CAMERA_HEIGHT=640 \
+KIWI_WRIST_CAMERA_ROTATION=90 \
+KIWI_CAMERA_FOURCC=MJPG \
+KIWI_CAMERA_BACKEND=200 \
+./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+To run only one camera:
+
+```bash
+KIWI_ENABLE_CAMERAS=1 KIWI_ENABLE_WRIST_CAMERA=0 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+KIWI_ENABLE_CAMERAS=1 KIWI_ENABLE_FRONT_CAMERA=0 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+If camera startup fails, verify the devices on the Pi:
+
+```bash
+ssh robot@pi5-robot.local 'ls -l /dev/video*'
+ssh robot@pi5-robot.local 'v4l2-ctl --list-devices'
+ssh robot@pi5-robot.local 'v4l2-ctl --device=/dev/video0 --list-formats-ext'
+ssh robot@pi5-robot.local 'v4l2-ctl --device=/dev/video2 --list-formats-ext'
+```
+
+If the camera devices are different, override `KIWI_FRONT_CAMERA_PATH` or `KIWI_WRIST_CAMERA_PATH`, or use the smoke-test mode without cameras:
+
+```bash
+KIWI_ENABLE_CAMERAS=0 ./my-scripts/kiwi-scripts/lekiwi-pi-teleop.sh
+```
+
+The default no-camera script does the same work you would do manually:
+
+```bash
+# On the Pi, started through SSH by the launcher:
+cd /home/robot/dev/lerobot
+PYTHONPATH=/home/robot/dev/lerobot/src \
+/home/robot/miniforge3/envs/lerobot-fork/bin/python \
+  -m lerobot.robots.lekiwi.lekiwi_host \
+  --robot.id=my_awesome_kiwi \
+  --robot.port=/dev/ttyACM0 \
+  --robot.cameras='{}' \
+  --host.connection_time_s=3600
+
+# On the laptop, started after the Pi ports are reachable:
+LEKIWI_REMOTE_IP=pi5-robot.local \
+LEKIWI_LEADER_PORT=/dev/tty.usbmodem5AE60574511 \
+LEKIWI_DISABLE_CAMERAS=1 \
+/Users/rdolgov/miniforge3/envs/lerobot-fork/bin/python examples/lekiwi/teleoperate.py
+```
+
+With `KIWI_ENABLE_CAMERAS=1`, the launcher omits `--robot.cameras='{}'` on the Pi and sends `LEKIWI_DISABLE_CAMERAS=0` to the laptop client.
+
+Troubleshooting:
+
+- `cd: /home/robot/lerobot: No such file or directory`: use `KIWI_PI_REPO_DIR=/home/robot/dev/lerobot`.
+- `ModuleNotFoundError: No module named 'zmq'`: use the `lerobot-fork` conda env or set `KIWI_LOCAL_PYTHON=/Users/rdolgov/miniforge3/envs/lerobot-fork/bin/python`.
+- `Timed out waiting for frame from camera OpenCVCamera(/dev/video0)`: use `KIWI_ENABLE_CAMERAS=1` with the launcher defaults, which force `backend=200` and `fourcc=MJPG`.
+- `Device or resource busy`: check for a stale camera process with `ssh robot@pi5-robot.local 'fuser -v /dev/video0 /dev/video2'`. The launcher normally clears stale `lekiwi_host` processes automatically with `KIWI_STOP_EXISTING_HOST=1`.
+- `Timeout waiting for LeKiwi host ports`: check the Pi host output above the timeout; the host may have failed to open `/dev/ttyACM0` or may be using different ZMQ ports.
+- `Permission denied`: confirm key-based SSH with `ssh robot@pi5-robot.local true`.
+
+If the LeKiwi host is already running on the Pi, you can run only the laptop client:
+
+```bash
+LEKIWI_REMOTE_IP=pi5-robot.local \
+LEKIWI_LEADER_PORT="$LEADER_PORT" \
+LEKIWI_DISABLE_CAMERAS=1 \
+/Users/rdolgov/miniforge3/envs/lerobot-fork/bin/python examples/lekiwi/teleoperate.py
+```

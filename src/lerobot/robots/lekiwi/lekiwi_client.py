@@ -133,7 +133,11 @@ class LeKiwiClient(Robot):
         poller.register(self.zmq_observation_socket, zmq.POLLIN)
         socks = dict(poller.poll(self.connect_timeout_s * 1000))
         if self.zmq_observation_socket not in socks or socks[self.zmq_observation_socket] != zmq.POLLIN:
-            raise DeviceNotConnectedError("Timeout waiting for LeKiwi Host to connect expired.")
+            raise DeviceNotConnectedError(
+                "Timeout waiting for LeKiwi Host observations at "
+                f"{zmq_observations_locator} after {self.connect_timeout_s}s. "
+                "Make sure lekiwi_host is running on the robot and the observation port is reachable."
+            )
 
         self._is_connected = True
 
