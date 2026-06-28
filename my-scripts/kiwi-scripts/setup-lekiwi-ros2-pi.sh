@@ -119,7 +119,7 @@ create_lerobot_venv() {
   python -m pip install --upgrade pip
   cd "$REPO_DIR"
   python -m pip install -e ".[lekiwi]"
-  python -m pip install "setuptools>=71,<80" cffi
+  python -m pip install "setuptools>=71,<80" cffi websockets
   python -c "import rclpy; import lerobot; print('ROS2 and LeRobot imports work')"
   python -m pip check || true
 }

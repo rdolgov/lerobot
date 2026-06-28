@@ -500,6 +500,42 @@ ros2 multicast send
 ros2 multicast receive
 ```
 
+### iPhone ROS2 control app
+
+The repo also includes a first iPhone control app and a ROS2 WebSocket bridge:
+
+```text
+examples/lekiwi/ios_control/
+```
+
+The phone talks WebSocket JSON to a bridge process, and the bridge publishes to
+`/lekiwi/action` while forwarding `/lekiwi/observation` images back to the app.
+
+Start the bridge on a Pi or Ubuntu machine that can see the LeKiwi ROS2 topics:
+
+```bash
+source ~/ros2_lekiwi_env.sh
+cd ~/dev/fork/rdolgov/lerobot
+python -m pip install websockets
+python examples/lekiwi/ios_control/ros2_websocket_bridge.py --host 0.0.0.0 --port 8765
+```
+
+Open the Xcode project on your Mac:
+
+```bash
+open examples/lekiwi/ios_control/LeKiwiControl/LeKiwiControl.xcodeproj
+```
+
+Then connect the app to one of:
+
+```text
+ws://pi5-robot.local:8765
+ws://pi3-robot.local:8765
+ws://<bridge-ip>:8765
+```
+
+See `examples/lekiwi/ios_control/README.md` for the full flow.
+
 ### Camera view in Rerun
 
 By default, the launcher disables cameras because it is the fastest smoke-test path. To see the Pi cameras in Rerun, enable cameras:
