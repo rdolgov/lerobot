@@ -406,6 +406,100 @@ Both sockets use `ZMQ_CONFLATE`, so they behave like a one-item latest-value que
 
 The Pi host also has a watchdog. If no command is received for more than `500ms`, it stops the mobile base.
 
+### ROS2 setup for Pi 3 / Pi 5 nodes
+
+Use this when preparing Raspberry Pi nodes for the ROS2 LeKiwi bridge. The
+scripts assume Ubuntu 24.04 64-bit with user `robot`.
+
+For a fresh Pi, copy and run the full bootstrap from your Mac:
+
+```bash
+cd /Users/rdolgov/code/so101/fork/rdolgov/lerobot
+
+# Defaults to robot@pi3-robot.local.
+./my-scripts/kiwi-scripts/setup-lekiwi-ros2-remote.sh
+
+# Or choose a target explicitly:
+LEKIWI_REMOTE=robot@pi5-robot.local \
+./my-scripts/kiwi-scripts/setup-lekiwi-ros2-remote.sh
+```
+
+This installs ROS2 Jazzy, clones/updates `https://github.com/rdolgov/lerobot`
+into `~/dev/fork/rdolgov/lerobot`, creates `~/ros2_lerobot_venv`, writes the
+`lekiwi_ros_bridge` ROS2 package, and builds it in `~/ros2_ws`.
+
+If you are already SSH'd into the Pi and the repo exists there, run the Pi-local
+bootstrap directly:
+
+```bash
+cd ~/dev/fork/rdolgov/lerobot
+./my-scripts/kiwi-scripts/setup-lekiwi-ros2-pi.sh
+```
+
+After Pi 3 and Pi 5 both have the ROS2 workspace, install the same common ROS2
+environment on both nodes from your Mac:
+
+```bash
+cd /Users/rdolgov/code/so101/fork/rdolgov/lerobot
+./my-scripts/kiwi-scripts/update-lekiwi-ros2-env-remote.sh
+```
+
+That updates both default targets:
+
+```text
+robot@pi3-robot.local
+robot@pi5-robot.local
+```
+
+To update only one node:
+
+```bash
+./my-scripts/kiwi-scripts/update-lekiwi-ros2-env-remote.sh robot@pi3-robot.local
+./my-scripts/kiwi-scripts/update-lekiwi-ros2-env-remote.sh robot@pi5-robot.local
+```
+
+The env updater creates `~/ros2_lekiwi_env.sh` on each Pi and adds a guarded
+`.bashrc` hook. It sets a common ROS domain and sources ROS2, the LeRobot venv,
+and the ROS2 workspace:
+
+```bash
+export ROS_DOMAIN_ID=23
+unset ROS_LOCALHOST_ONLY
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+source ~/ros2_ws/install/setup.bash
+```
+
+In an existing SSH terminal, reload it with:
+
+```bash
+source ~/ros2_lekiwi_env.sh
+```
+
+Quick mock-mode test:
+
+```bash
+# Terminal 1, on one Pi:
+source ~/ros2_lekiwi_env.sh
+ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args -p mock:=true
+
+# Terminal 2, on the other Pi:
+source ~/ros2_lekiwi_env.sh
+ros2 topic list -t
+ros2 node list
+ros2 run lekiwi_ros_bridge observation_echo
+```
+
+If nodes are not visible across machines, verify both terminals report the same
+domain:
+
+```bash
+echo "$ROS_DOMAIN_ID"
+echo "${ROS_LOCALHOST_ONLY:-unset}"
+ros2 multicast send
+ros2 multicast receive
+```
+
 ### Camera view in Rerun
 
 By default, the launcher disables cameras because it is the fastest smoke-test path. To see the Pi cameras in Rerun, enable cameras:

@@ -1,0 +1,956 @@
+# LeKiwi ROS2 Milestone 1
+
+This tutorial builds the first ROS2 version of the current LeKiwi remote link.
+The goal is not to make the final, clean ROS2 architecture yet. The goal is to
+replace the current ZeroMQ transport with a small ROS2 graph while learning the
+core ROS2 ideas: nodes, topics, messages, QoS, workspaces, packages, and CLI
+introspection.
+
+By the end, you will have:
+
+- A ROS2 node on the Raspberry Pi that wraps the existing `LeKiwi` Python class.
+- A `/lekiwi/action` topic that receives JSON actions.
+- A `/lekiwi/observation` topic that publishes JSON observations.
+- A mock mode so you can learn safely before moving motors.
+- A path to run the same system across two machines later.
+
+This is intentionally close to the current ZeroMQ design. Milestone 2 is where
+you split this into more idiomatic ROS2 topics such as `/cmd_vel`,
+`/joint_states`, and camera image topics.
+
+## What you are replacing
+
+The current LeKiwi flow is:
+
+```text
+laptop LeKiwiClient
+  sends JSON action over ZeroMQ
+        |
+        v
+Pi lekiwi_host.py
+  robot.send_action(action)
+  robot.get_observation()
+        |
+        v
+laptop LeKiwiClient
+  receives JSON observation over ZeroMQ
+```
+
+Milestone 1 changes only the transport:
+
+```text
+remote ROS2 node or ros2 CLI
+  publishes std_msgs/String JSON on /lekiwi/action
+        |
+        v
+Pi lekiwi_ros_host
+  robot.send_action(action)
+  robot.get_observation()
+        |
+        v
+remote ROS2 node or ros2 CLI
+  subscribes to std_msgs/String JSON on /lekiwi/observation
+```
+
+This is still a rough bridge. It is a good bridge because it lets you learn ROS2
+without redesigning everything at once.
+
+## ROS2 concepts for this milestone
+
+### Node
+
+A node is one running participant in a ROS2 graph. A node should usually do one
+logical job. In this milestone, the important node is `lekiwi_ros_host`: it owns
+the robot hardware and talks to the rest of ROS2.
+
+### Topic
+
+A topic is a named stream of messages. Publishers write messages to a topic.
+Subscribers receive messages from a topic. For continuous robot data such as
+commands and observations, topics are the natural first tool.
+
+### Message
+
+Every topic has a message type. In this milestone we use `std_msgs/msg/String`
+and put JSON inside the `data` field. That keeps the first milestone close to
+the existing ZeroMQ code. Later, you should replace the JSON string with typed
+ROS2 messages.
+
+### QoS
+
+QoS means Quality of Service. It controls queue depth, reliability, durability,
+and other delivery behavior. For robot teleoperation over Wi-Fi, old commands
+are often worse than dropped commands, so this tutorial uses:
+
+```text
+history: keep last
+depth: 1
+reliability: best effort
+durability: volatile
+```
+
+This is similar in spirit to the current ZeroMQ `CONFLATE` behavior: prefer the
+latest command/observation.
+
+## Hardware and OS assumptions
+
+Recommended starting point:
+
+- Raspberry Pi 5 or similar Pi-compatible computer.
+- Ubuntu Server 24.04 arm64 on the Pi.
+- ROS2 Jazzy on the Pi.
+- LeRobot cloned on the Pi.
+- Your LeKiwi already configured/calibrated with the normal LeRobot flow.
+
+ROS2 Jazzy deb packages are available for Ubuntu Noble 24.04. If your Pi is
+currently running Raspberry Pi OS, consider using Ubuntu Server 24.04 for this
+project. It will make the first ROS2 experience much smoother.
+
+If your laptop is macOS, do not make native macOS ROS2 your first battle.
+Start by running both ROS2 nodes on the Pi. Once the graph works, use an Ubuntu
+24.04 laptop, desktop, VM, or mini PC as the remote host.
+
+If you are setting up another Raspberry Pi, such as `robot@pi3-robot.local`, the
+repo includes a bootstrap script that follows the same setup:
+
+```bash
+cd ~/dev/fork/rdolgov/lerobot
+./my-scripts/kiwi-scripts/setup-lekiwi-ros2-pi.sh
+```
+
+The script expects Ubuntu 24.04 64-bit, clones or updates
+`https://github.com/rdolgov/lerobot` at `~/dev/fork/rdolgov/lerobot`, installs
+ROS2 Jazzy, creates `~/ros2_lerobot_venv`, installs LeRobot with the LeKiwi
+extra, writes the `lekiwi_ros_bridge` package, and builds it in `~/ros2_ws`.
+
+## Phase 0: Install ROS2 Jazzy on the Pi
+
+On the Pi, follow the official ROS2 Jazzy Ubuntu deb install guide. The short
+shape is:
+
+```bash
+sudo apt update
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+sudo apt update && sudo apt install curl -y
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest \
+  | grep -F "tag_name" \
+  | awk -F'"' '{print $4}')
+curl -L -o /tmp/ros2-apt-source.deb \
+  "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
+sudo apt update
+sudo apt install ros-jazzy-ros-base ros-dev-tools
+```
+
+For a headless Pi, `ros-jazzy-ros-base` is enough. On an Ubuntu desktop machine,
+`ros-jazzy-desktop` is nicer because it includes GUI tools such as RViz.
+
+Source ROS2 in every new terminal:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+```
+
+If you use `zsh`:
+
+```bash
+source /opt/ros/jazzy/setup.zsh
+```
+
+Check the install:
+
+```bash
+ros2 --help
+ros2 doctor
+```
+
+## Phase 1: Create a ROS2 plus LeRobot Python environment
+
+ROS2 installed from apt uses the system Python. LeRobot often uses `uv` or its
+own virtual environment. For this tutorial, make a small ROS2-friendly virtual
+environment that can see ROS2's system packages:
+
+```bash
+conda deactivate  # repeat until "(base)" disappears, if you use conda/miniforge
+which python3
+python3 --version
+/usr/bin/python3.12 -m venv --system-site-packages ~/ros2_lerobot_venv
+source ~/ros2_lerobot_venv/bin/activate
+```
+
+The interpreter must be Ubuntu's Python 3.12, not conda Python. ROS2 Jazzy's
+`rclpy` Python extension is compiled for Python 3.12 on Ubuntu 24.04. If your
+prompt still shows `(base)` or `which python3` points into `miniforge3`,
+deactivate conda before creating the venv.
+
+If you already created the venv from conda Python by accident, delete and
+recreate only that venv:
+
+```bash
+deactivate
+conda deactivate
+rm -rf ~/ros2_lerobot_venv
+/usr/bin/python3.12 -m venv --system-site-packages ~/ros2_lerobot_venv
+source ~/ros2_lerobot_venv/bin/activate
+```
+
+Clone or enter your LeRobot checkout on the Pi:
+
+```bash
+cd ~/dev/fork/rdolgov/lerobot
+python -m pip install -e ".[lekiwi]"
+python -m pip install "setuptools>=71,<80"
+```
+
+This tutorial assumes your Pi checkout lives at
+`~/dev/fork/rdolgov/lerobot`. If you clone LeRobot somewhere else later, use
+that path whenever a command enters the LeRobot repository.
+
+Quick import check:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+python -c "import rclpy; import lerobot; print('ROS2 and LeRobot imports work')"
+python -m pip check
+```
+
+If that import fails, fix it before continuing. The ROS2 node will need both
+`rclpy` and `lerobot` in the same Python runtime.
+
+If `pip check` reports only a `colcon-core` conflict with `setuptools`, run
+`python -m pip install "setuptools>=71,<80"` again. LeRobot accepts this version
+range, and `colcon` needs it.
+
+If `import rclpy` says `ModuleNotFoundError`, your shell probably has not
+sourced ROS2. Check:
+
+```bash
+echo "$ROS_DISTRO"
+echo "$PYTHONPATH" | tr ':' '\n' | grep /opt/ros
+```
+
+You should see `jazzy` and at least one `/opt/ros/jazzy/...` path. If not, run
+the two `source` commands above and try the import again.
+
+If `pip check` reports `pynacl ... requires cffi`, install the missing Python
+package:
+
+```bash
+python -m pip install cffi
+python -m pip check
+```
+
+## Phase 2: Create a ROS2 workspace and package
+
+A ROS2 workspace is a folder containing ROS2 packages. Packages usually live
+under a `src/` folder.
+
+```bash
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+ros2 pkg create --build-type ament_python lekiwi_ros_bridge \
+  --dependencies rclpy std_msgs
+```
+
+You should now have:
+
+```text
+~/ros2_ws/src/lekiwi_ros_bridge/
+  package.xml
+  setup.py
+  resource/lekiwi_ros_bridge
+  lekiwi_ros_bridge/
+    __init__.py
+```
+
+## Phase 3: Add the Pi host node
+
+Create this file:
+
+```bash
+cd ~/ros2_ws/src/lekiwi_ros_bridge
+nano lekiwi_ros_bridge/lekiwi_host_node.py
+```
+
+Paste:
+
+```python
+import base64
+import json
+import time
+from typing import Any
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+
+STATE_KEYS = (
+    "arm_shoulder_pan.pos",
+    "arm_shoulder_lift.pos",
+    "arm_elbow_flex.pos",
+    "arm_wrist_flex.pos",
+    "arm_wrist_roll.pos",
+    "arm_gripper.pos",
+    "x.vel",
+    "y.vel",
+    "theta.vel",
+)
+
+
+class MockLeKiwi:
+    def __init__(self) -> None:
+        self.last_action = {key: 0.0 for key in STATE_KEYS}
+        self.cameras = {}
+
+    def connect(self) -> None:
+        pass
+
+    def send_action(self, action: dict[str, float]) -> dict[str, float]:
+        self.last_action.update(action)
+        return self.last_action
+
+    def get_observation(self) -> dict[str, float]:
+        return dict(self.last_action)
+
+    def stop_base(self) -> None:
+        self.last_action["x.vel"] = 0.0
+        self.last_action["y.vel"] = 0.0
+        self.last_action["theta.vel"] = 0.0
+
+    def disconnect(self) -> None:
+        pass
+
+
+class LeKiwiRosHost(Node):
+    def __init__(self) -> None:
+        super().__init__("lekiwi_ros_host")
+
+        self.declare_parameter("mock", True)
+        self.declare_parameter("robot_id", "my_awesome_kiwi")
+        self.declare_parameter("port", "/dev/ttyACM0")
+        self.declare_parameter("disable_cameras", True)
+        self.declare_parameter("max_loop_freq_hz", 30.0)
+        self.declare_parameter("watchdog_timeout_ms", 500.0)
+
+        self.mock = bool(self.get_parameter("mock").value)
+        self.max_loop_freq_hz = float(self.get_parameter("max_loop_freq_hz").value)
+        self.watchdog_timeout_s = float(self.get_parameter("watchdog_timeout_ms").value) / 1000.0
+
+        self.qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
+        self.robot = self._make_robot()
+        self.robot.connect()
+
+        self.last_cmd_time = time.monotonic()
+        self.watchdog_active = False
+
+        self.action_sub = self.create_subscription(
+            String,
+            "/lekiwi/action",
+            self.on_action,
+            self.qos,
+        )
+        self.obs_pub = self.create_publisher(String, "/lekiwi/observation", self.qos)
+        self.timer = self.create_timer(1.0 / self.max_loop_freq_hz, self.on_timer)
+
+        mode = "mock" if self.mock else "real robot"
+        self.get_logger().info(f"LeKiwi ROS host started in {mode} mode")
+
+    def _make_robot(self) -> Any:
+        if self.mock:
+            return MockLeKiwi()
+
+        from lerobot.robots.lekiwi import LeKiwi
+        from lerobot.robots.lekiwi.config_lekiwi import LeKiwiConfig
+
+        kwargs: dict[str, Any] = {
+            "id": str(self.get_parameter("robot_id").value),
+            "port": str(self.get_parameter("port").value),
+        }
+        if bool(self.get_parameter("disable_cameras").value):
+            kwargs["cameras"] = {}
+
+        return LeKiwi(LeKiwiConfig(**kwargs))
+
+    def on_action(self, msg: String) -> None:
+        try:
+            action = json.loads(msg.data)
+            if not isinstance(action, dict):
+                raise ValueError("action JSON must be an object")
+        except Exception as exc:
+            self.get_logger().warning(f"Bad action message: {exc}")
+            return
+
+        action.setdefault("x.vel", 0.0)
+        action.setdefault("y.vel", 0.0)
+        action.setdefault("theta.vel", 0.0)
+
+        try:
+            self.robot.send_action(action)
+        except Exception as exc:
+            self.get_logger().error(f"robot.send_action failed: {exc}")
+            return
+
+        self.last_cmd_time = time.monotonic()
+        self.watchdog_active = False
+
+    def on_timer(self) -> None:
+        now = time.monotonic()
+        if now - self.last_cmd_time > self.watchdog_timeout_s and not self.watchdog_active:
+            self.get_logger().warning("No recent command; stopping base")
+            self.watchdog_active = True
+            try:
+                self.robot.stop_base()
+            except Exception as exc:
+                self.get_logger().error(f"robot.stop_base failed: {exc}")
+
+        try:
+            observation = self.robot.get_observation()
+            encoded = self._json_safe_observation(observation)
+            self.obs_pub.publish(String(data=json.dumps(encoded)))
+        except Exception as exc:
+            self.get_logger().error(f"publishing observation failed: {exc}")
+
+    def _json_safe_observation(self, observation: dict[str, Any]) -> dict[str, Any]:
+        encoded: dict[str, Any] = {}
+        for key, value in observation.items():
+            if hasattr(value, "shape"):
+                encoded[key] = self._encode_array(key, value)
+            elif hasattr(value, "item"):
+                encoded[key] = value.item()
+            else:
+                encoded[key] = value
+        return encoded
+
+    def _encode_array(self, key: str, value: Any) -> Any:
+        if len(value.shape) == 3:
+            import cv2
+
+            ok, buffer = cv2.imencode(".jpg", value, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if not ok:
+                self.get_logger().warning(f"failed to encode image {key}")
+                return ""
+            return base64.b64encode(buffer).decode("utf-8")
+
+        return value.tolist()
+
+    def destroy_node(self) -> None:
+        try:
+            self.robot.disconnect()
+        finally:
+            super().destroy_node()
+
+
+def main() -> None:
+    rclpy.init()
+    node = LeKiwiRosHost()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+What this teaches:
+
+- `Node(...)` creates a ROS2 participant.
+- `create_subscription(...)` listens to a topic.
+- `create_publisher(...)` publishes to a topic.
+- `create_timer(...)` runs a periodic control loop.
+- QoS depth 1 keeps only the newest message.
+
+## Phase 4: Add a simple action publisher
+
+This node is your first remote command source. In real life it could be a
+keyboard, a leader arm, or a policy. For now, it just publishes a steady velocity
+command.
+
+Create:
+
+```bash
+nano lekiwi_ros_bridge/action_publisher_node.py
+```
+
+Paste:
+
+```python
+import json
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+
+class ActionPublisher(Node):
+    def __init__(self) -> None:
+        super().__init__("lekiwi_action_publisher")
+
+        self.declare_parameter("rate_hz", 5.0)
+        self.declare_parameter("x_vel", 0.0)
+        self.declare_parameter("y_vel", 0.0)
+        self.declare_parameter("theta_vel", 0.0)
+
+        qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.pub = self.create_publisher(String, "/lekiwi/action", qos)
+
+        rate_hz = float(self.get_parameter("rate_hz").value)
+        self.timer = self.create_timer(1.0 / rate_hz, self.on_timer)
+
+    def on_timer(self) -> None:
+        action = {
+            "x.vel": float(self.get_parameter("x_vel").value),
+            "y.vel": float(self.get_parameter("y_vel").value),
+            "theta.vel": float(self.get_parameter("theta_vel").value),
+        }
+        self.pub.publish(String(data=json.dumps(action)))
+
+
+def main() -> None:
+    rclpy.init()
+    node = ActionPublisher()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Phase 5: Add an observation echo node
+
+`ros2 topic echo` works, but the observation JSON can get large once cameras are
+enabled. This node prints a compact summary.
+
+Create:
+
+```bash
+nano lekiwi_ros_bridge/observation_echo_node.py
+```
+
+Paste:
+
+```python
+import json
+import time
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+
+
+class ObservationEcho(Node):
+    def __init__(self) -> None:
+        super().__init__("lekiwi_observation_echo")
+        qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.last_print = 0.0
+        self.sub = self.create_subscription(String, "/lekiwi/observation", self.on_observation, qos)
+
+    def on_observation(self, msg: String) -> None:
+        now = time.monotonic()
+        if now - self.last_print < 1.0:
+            return
+        self.last_print = now
+
+        obs = json.loads(msg.data)
+        summary = {
+            "x.vel": obs.get("x.vel"),
+            "y.vel": obs.get("y.vel"),
+            "theta.vel": obs.get("theta.vel"),
+            "keys": sorted(obs.keys()),
+        }
+        self.get_logger().info(json.dumps(summary))
+
+
+def main() -> None:
+    rclpy.init()
+    node = ObservationEcho()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## Phase 6: Register the executables
+
+Open `setup.py`:
+
+```bash
+nano setup.py
+```
+
+Find `entry_points` and make it look like this:
+
+```python
+entry_points={
+    "console_scripts": [
+        "lekiwi_host_node = lekiwi_ros_bridge.lekiwi_host_node:main",
+        "action_publisher = lekiwi_ros_bridge.action_publisher_node:main",
+        "observation_echo = lekiwi_ros_bridge.observation_echo_node:main",
+    ],
+},
+```
+
+Your package already depends on `rclpy` and `std_msgs` because you created it
+with `--dependencies rclpy std_msgs`. You can confirm in `package.xml`:
+
+```xml
+<depend>rclpy</depend>
+<depend>std_msgs</depend>
+```
+
+## Phase 7: Build the workspace
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+colcon build --symlink-install
+source install/setup.bash
+```
+
+If you use `zsh`, use:
+
+```bash
+source /opt/ros/jazzy/setup.zsh
+source ~/ros2_lerobot_venv/bin/activate
+source install/setup.zsh
+```
+
+Confirm ROS2 can find your package:
+
+```bash
+ros2 pkg list | grep lekiwi_ros_bridge
+ros2 pkg executables lekiwi_ros_bridge
+```
+
+Expected executables:
+
+```text
+lekiwi_ros_bridge action_publisher
+lekiwi_ros_bridge lekiwi_host_node
+lekiwi_ros_bridge observation_echo
+```
+
+If `ros2 run lekiwi_ros_bridge lekiwi_host_node` fails with
+`ModuleNotFoundError: No module named 'lekiwi_ros_bridge'`, ROS2 found the
+console-script wrapper but Python cannot import the package module. First make
+sure conda is not active, rebuild, and source the workspace again:
+
+```bash
+conda deactivate  # repeat until "(base)" disappears
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+rm -rf build/lekiwi_ros_bridge install/lekiwi_ros_bridge log
+colcon build --symlink-install --packages-select lekiwi_ros_bridge
+source install/setup.bash
+python -c "import lekiwi_ros_bridge; print(lekiwi_ros_bridge.__file__)"
+```
+
+That import should print a path under `~/ros2_ws/install/...` or
+`~/ros2_ws/src/...`. If it still fails, check that the files are in the nested
+Python package directory:
+
+```bash
+ls ~/ros2_ws/src/lekiwi_ros_bridge
+ls ~/ros2_ws/src/lekiwi_ros_bridge/lekiwi_ros_bridge
+```
+
+The node files must live in the second directory:
+
+```text
+~/ros2_ws/src/lekiwi_ros_bridge/lekiwi_ros_bridge/lekiwi_host_node.py
+~/ros2_ws/src/lekiwi_ros_bridge/lekiwi_ros_bridge/action_publisher_node.py
+~/ros2_ws/src/lekiwi_ros_bridge/lekiwi_ros_bridge/observation_echo_node.py
+```
+
+## Phase 8: Run everything in mock mode
+
+Use three terminals on the Pi.
+
+Terminal 1, host:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args -p mock:=true
+```
+
+Terminal 2, observation echo:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge observation_echo
+```
+
+Terminal 3, command publisher:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge action_publisher --ros-args \
+  -p x_vel:=0.1 \
+  -p y_vel:=0.0 \
+  -p theta_vel:=0.0 \
+  -p rate_hz:=5.0
+```
+
+You should see the echo node report `x.vel` around `0.1`.
+
+Now stop Terminal 3 with `Ctrl+C`. Within about 0.5 seconds, Terminal 1 should
+log:
+
+```text
+No recent command; stopping base
+```
+
+That is your watchdog.
+
+## Phase 9: Inspect the graph with ROS2 CLI tools
+
+List topics:
+
+```bash
+ros2 topic list -t
+```
+
+Expected:
+
+```text
+/lekiwi/action [std_msgs/msg/String]
+/lekiwi/observation [std_msgs/msg/String]
+```
+
+Inspect who is connected:
+
+```bash
+ros2 topic info /lekiwi/action --verbose
+ros2 topic info /lekiwi/observation --verbose
+```
+
+Look for:
+
+```text
+Reliability: BEST_EFFORT
+History (Depth): KEEP_LAST (1)
+```
+
+Measure observation rate:
+
+```bash
+ros2 topic hz /lekiwi/observation
+```
+
+Echo raw messages:
+
+```bash
+ros2 topic echo /lekiwi/action --qos-reliability best_effort
+ros2 topic echo /lekiwi/observation --qos-reliability best_effort
+```
+
+Publish a one-off stop command from the CLI:
+
+```bash
+ros2 topic pub --once /lekiwi/action std_msgs/msg/String \
+  '{data: "{\"x.vel\": 0.0, \"y.vel\": 0.0, \"theta.vel\": 0.0}"}'
+```
+
+This command is ugly because it is YAML containing JSON. That ugliness is one
+reason Milestone 2 should move to real ROS2 message types.
+
+If `ros2 topic echo` shows no data but your nodes are running, check QoS first.
+A reliable subscriber will not connect to a best-effort publisher, so the
+`--qos-reliability best_effort` flag matters here. Some ROS2 CLI versions do not
+support QoS overrides for `ros2 topic hz`; use plain `ros2 topic hz
+/lekiwi/observation` first, or run `ros2 topic hz -h` to see what your local CLI
+supports.
+
+## Phase 10: Run against the real LeKiwi
+
+Do this only after mock mode works.
+
+Safety checklist:
+
+- Put the robot on blocks or lift the wheels off the table/floor for the first
+  run.
+- Start with cameras disabled.
+- Start with zero velocity.
+- Keep a terminal ready to `Ctrl+C`.
+- Keep physical power within reach.
+
+Terminal 1:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args \
+  -p mock:=false \
+  -p robot_id:=my_awesome_kiwi \
+  -p port:=/dev/ttyACM0 \
+  -p disable_cameras:=true \
+  -p max_loop_freq_hz:=30.0 \
+  -p watchdog_timeout_ms:=500.0
+```
+
+Terminal 2:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge observation_echo
+```
+
+Terminal 3, publish a zero command first:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_lerobot_venv/bin/activate
+cd ~/ros2_ws
+source install/setup.bash
+ros2 run lekiwi_ros_bridge action_publisher --ros-args \
+  -p x_vel:=0.0 \
+  -p y_vel:=0.0 \
+  -p theta_vel:=0.0 \
+  -p rate_hz:=5.0
+```
+
+If that is stable, stop Terminal 3 and try a tiny command:
+
+```bash
+ros2 run lekiwi_ros_bridge action_publisher --ros-args \
+  -p x_vel:=0.03 \
+  -p y_vel:=0.0 \
+  -p theta_vel:=0.0 \
+  -p rate_hz:=5.0
+```
+
+Stop it after a second or two. The watchdog should stop the base when commands
+stop.
+
+## Phase 11: Try two machines
+
+Once the Pi-only version works, run:
+
+- `lekiwi_host_node` on the Pi.
+- `action_publisher` and `observation_echo` on an Ubuntu 24.04 remote host.
+
+On both machines, use the same ROS domain:
+
+```bash
+export ROS_DOMAIN_ID=23
+source /opt/ros/jazzy/setup.bash
+```
+
+Build the same `lekiwi_ros_bridge` package on both machines, or copy only the
+client-side nodes to the remote host.
+
+Check discovery from each machine:
+
+```bash
+ros2 node list
+ros2 topic list -t
+```
+
+If the machines do not see each other:
+
+- Make sure they are on the same network.
+- Make sure VPNs are disabled.
+- Make sure the firewall allows ROS2/DDS traffic.
+- Try `ros2 multicast send` on one machine and `ros2 multicast receive` on the
+  other.
+- Use the same `ROS_DOMAIN_ID` on both machines.
+
+## What you should understand after Milestone 1
+
+You should be able to explain:
+
+- What a ROS2 node is.
+- Why `/lekiwi/action` and `/lekiwi/observation` are topics.
+- Why this milestone uses `std_msgs/msg/String`.
+- Why depth 1 is useful for teleoperation.
+- How a watchdog protects the robot if commands stop arriving.
+- How to inspect a ROS graph with `ros2 topic list`, `ros2 topic info`,
+  `ros2 topic echo`, and `ros2 topic hz`.
+
+## When to move to Milestone 2
+
+Move on when all of these are true:
+
+- Mock mode works.
+- Real mode publishes observations.
+- Real mode accepts zero velocity commands.
+- A tiny velocity command moves the base as expected.
+- The watchdog stops the base when the publisher stops.
+- You can inspect the topics from the CLI without guessing.
+
+Milestone 2 should replace the JSON bridge with typed topics:
+
+```text
+/cmd_vel                      geometry_msgs/msg/Twist
+/joint_states                 sensor_msgs/msg/JointState
+/arm_goal                     sensor_msgs/msg/JointState or trajectory_msgs/msg/JointTrajectory
+/front/image/compressed       sensor_msgs/msg/CompressedImage
+/wrist/image/compressed       sensor_msgs/msg/CompressedImage
+```
+
+That is where the project starts to feel like normal ROS2.
+
+## References
+
+- ROS2 Jazzy Ubuntu install: https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Installation/Ubuntu-Install-Debs.rst
+- ROS2 nodes concept: https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Concepts/Basic/About-Nodes.rst
+- ROS2 topics concept: https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Concepts/Basic/About-Topics.rst
+- ROS2 QoS concept: https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Concepts/Intermediate/About-Quality-of-Service-Settings.rst
+- ROS2 topic CLI tutorial: https://raw.githubusercontent.com/ros2/ros2_documentation/jazzy/source/Tutorials/Beginner-CLI-Tools/Understanding-ROS2-Topics/Understanding-ROS2-Topics.rst

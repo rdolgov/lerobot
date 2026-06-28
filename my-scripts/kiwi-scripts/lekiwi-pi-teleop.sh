@@ -22,7 +22,7 @@ Defaults:
   KIWI_ROBOT_PORT=/dev/ttyACM0
   KIWI_LOCAL_CONDA_ENV=lerobot-fork
   KIWI_ENABLE_CAMERAS=0
-  KIWI_FRONT_CAMERA_PATH=/dev/video0
+zzzzzzwwwxzzzrwzzzzwwwzwzxxxxwzxxzwwzwzwzw  KIWI_FRONT_CAMERA_PATH=/dev/video0
   KIWI_WRIST_CAMERA_PATH=/dev/video2
   KIWI_CAMERA_FOURCC=MJPG
   KIWI_CAMERA_BACKEND=200

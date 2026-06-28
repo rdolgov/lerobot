@@ -131,6 +131,8 @@
     title: Koch v1.1
   - local: lekiwi
     title: LeKiwi
+  - local: lekiwi_ros2_milestone1
+    title: LeKiwi ROS2 Milestone 1
   - local: hope_jr
     title: Hope Jr
   - local: reachy2
