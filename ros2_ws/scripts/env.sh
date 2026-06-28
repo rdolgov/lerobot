@@ -14,6 +14,7 @@ WS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROS_DISTRO="${ROS_DISTRO:-jazzy}"
 ROS_SETUP="/opt/ros/${ROS_DISTRO}/setup.bash"
 LEROBOT_VENV="${LEROBOT_VENV:-${HOME}/ros2_lerobot_venv}"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-23}"
 
 if [ ! -f "${ROS_SETUP}" ]; then
   echo "ROS setup file not found: ${ROS_SETUP}" >&2

@@ -7,12 +7,14 @@ This workspace contains a small ROS 2 bridge for running LeKiwi through ROS topi
 - `observation_echo` prints a compact observation summary once per second.
 
 The scripts in `scripts/` source ROS, activate the LeRobot virtualenv, and source this workspace for you.
+New terminals also source `/opt/ros/jazzy/setup.bash` and default `ROS_DOMAIN_ID` to `23` from `~/.bashrc`.
 
 ## Expected Setup
 
 Defaults used by the scripts:
 
 - ROS distro: `jazzy`
+- ROS domain id: `23`
 - LeRobot virtualenv: `~/ros2_lerobot_venv`
 - Robot serial port: `/dev/ttyACM0`
 - Robot id: `my_awesome_kiwi`
@@ -21,6 +23,7 @@ You can override these with environment variables:
 
 ```bash
 export ROS_DISTRO=jazzy
+export ROS_DOMAIN_ID=23
 export LEROBOT_VENV=~/ros2_lerobot_venv
 export ROBOT_ID=my_awesome_kiwi
 export LEKIWI_PORT=/dev/ttyACM0
@@ -125,4 +128,3 @@ Attach later with:
 ```bash
 tmux attach -t lekiwi_ros
 ```
-
