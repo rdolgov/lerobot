@@ -43,21 +43,40 @@ ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args \
   -p disable_cameras:=true
 ```
 
-To see images in the app, run the real host with cameras enabled:
+Keep `disable_cameras:=true` when using the separate camera publisher below.
+That avoids two processes fighting over `/dev/video*`.
+
+## 2. Start the camera publisher
+
+On the Pi that owns the mobile-base cameras:
 
 ```bash
 source ~/ros2_lekiwi_env.sh
-ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args \
-  -p mock:=false \
-  -p robot_id:=my_awesome_kiwi \
-  -p port:=/dev/ttyACM0 \
-  -p disable_cameras:=false
+cd ~/dev/fork/rdolgov/lerobot
+sudo apt install ros-jazzy-sensor-msgs
+python examples/lekiwi/ios_control/ros2_camera_publisher.py
 ```
 
-The current Milestone 1 host publishes camera images as base64 JPEG fields named
-`front` and `wrist` inside `/lekiwi/observation`.
+It publishes standard ROS2 compressed image topics:
 
-## 2. Start the WebSocket bridge
+```text
+/lekiwi/front/image/compressed
+/lekiwi/wrist/image/compressed
+```
+
+Useful overrides:
+
+```bash
+python examples/lekiwi/ios_control/ros2_camera_publisher.py \
+  --front-path /dev/video0 \
+  --wrist-path /dev/video2 \
+  --front-rotation 0 \
+  --wrist-rotation 90 \
+  --publish-fps 10 \
+  --jpeg-quality 80
+```
+
+## 3. Start the WebSocket bridge
 
 On any machine that can see the LeKiwi ROS2 topics, usually the same Pi:
 
@@ -84,10 +103,15 @@ You should see:
 ```text
 /lekiwi/action [std_msgs/msg/String]
 /lekiwi/observation [std_msgs/msg/String]
+/lekiwi/front/image/compressed [sensor_msgs/msg/CompressedImage]
+/lekiwi/wrist/image/compressed [sensor_msgs/msg/CompressedImage]
 /lekiwi_ios_websocket_bridge
 ```
 
-## 3. Open the iOS app
+The WebSocket bridge subscribes to the compressed image topics and forwards the
+latest JPEGs to the iPhone as base64 fields named `front` and `wrist`.
+
+## 4. Open the iOS app
 
 On your Mac:
 
@@ -104,7 +128,7 @@ In Xcode:
 
 On first launch, iOS may ask for Local Network permission. Allow it.
 
-## 4. Connect from the phone
+## 5. Connect from the phone
 
 Use the bridge machine hostname or IP:
 
@@ -138,9 +162,10 @@ Use the IP address from `hostname -I` in the app URL.
 
 If the app connects but no image appears:
 
-- Start the real LeKiwi host with `-p disable_cameras:=false`.
-- Confirm `/lekiwi/observation` contains `front` or `wrist` fields.
+- Run `ros2_camera_publisher.py` on the Pi with the cameras.
+- Confirm `/lekiwi/front/image/compressed` or `/lekiwi/wrist/image/compressed` exists.
 - Confirm camera devices are free on the Pi.
+- Use `ros2 topic hz /lekiwi/front/image/compressed` to check frame rate.
 
 If controls do not move the mock observation:
 

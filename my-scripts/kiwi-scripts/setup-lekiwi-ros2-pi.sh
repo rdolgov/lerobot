@@ -48,6 +48,8 @@ EOF
 install_ros2_jazzy() {
   if command -v ros2 >/dev/null 2>&1 && [[ -f "/opt/ros/$ROS_DISTRO_NAME/setup.bash" ]]; then
     log "ROS2 $ROS_DISTRO_NAME already appears to be installed"
+    sudo apt update
+    sudo apt install -y "ros-$ROS_DISTRO_NAME-rclpy" "ros-$ROS_DISTRO_NAME-sensor-msgs"
     return
   fi
 
@@ -74,7 +76,11 @@ install_ros2_jazzy() {
     "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ros_apt_source_version}/ros2-apt-source_${ros_apt_source_version}.${codename}_all.deb"
   sudo dpkg -i "$deb"
   sudo apt update
-  sudo apt install -y "ros-$ROS_DISTRO_NAME-ros-base" ros-dev-tools "ros-$ROS_DISTRO_NAME-rclpy"
+  sudo apt install -y \
+    "ros-$ROS_DISTRO_NAME-ros-base" \
+    "ros-$ROS_DISTRO_NAME-rclpy" \
+    "ros-$ROS_DISTRO_NAME-sensor-msgs" \
+    ros-dev-tools
 }
 
 clone_or_update_lerobot() {

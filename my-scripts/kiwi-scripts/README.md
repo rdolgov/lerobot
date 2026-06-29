@@ -520,6 +520,26 @@ python -m pip install websockets
 python examples/lekiwi/ios_control/ros2_websocket_bridge.py --host 0.0.0.0 --port 8765
 ```
 
+For images in the app, run the separate camera publisher on the Pi that owns the
+camera devices. Keep the LeKiwi host itself on `-p disable_cameras:=true` so only
+one process opens `/dev/video0` and `/dev/video2`.
+
+```bash
+source ~/ros2_lekiwi_env.sh
+cd ~/dev/fork/rdolgov/lerobot
+sudo apt install ros-jazzy-sensor-msgs
+python examples/lekiwi/ios_control/ros2_camera_publisher.py \
+  --front-path /dev/video0 \
+  --wrist-path /dev/video2
+```
+
+It publishes:
+
+```text
+/lekiwi/front/image/compressed
+/lekiwi/wrist/image/compressed
+```
+
 Open the Xcode project on your Mac:
 
 ```bash

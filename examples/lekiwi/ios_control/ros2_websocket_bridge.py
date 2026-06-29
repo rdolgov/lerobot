@@ -4,7 +4,11 @@
 
 The bridge talks ROS2 on one side and plain WebSocket JSON on the other:
 
-    iPhone app <-> ws://<bridge-host>:8765 <-> /lekiwi/action, /lekiwi/observation
+    iPhone app <-> ws://<bridge-host>:8765 <->
+      /lekiwi/action
+      /lekiwi/observation
+      /lekiwi/front/image/compressed
+      /lekiwi/wrist/image/compressed
 
 Run it from a ROS2 terminal:
 
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import signal
@@ -35,6 +40,7 @@ except ImportError as exc:  # pragma: no cover - user setup guard
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
 LOGGER = logging.getLogger("lekiwi_ios_bridge")
@@ -55,7 +61,7 @@ class Command:
 
 
 class LeKiwiWebSocketBridge(Node):
-    def __init__(self, command_timeout_s: float) -> None:
+    def __init__(self, args: argparse.Namespace) -> None:
         super().__init__("lekiwi_ios_websocket_bridge")
 
         qos = QoSProfile(
@@ -72,11 +78,24 @@ class LeKiwiWebSocketBridge(Node):
             self._on_observation,
             qos,
         )
+        self.front_image_sub = self.create_subscription(
+            CompressedImage,
+            args.front_image_topic,
+            lambda msg: self._on_image("front", msg),
+            qos,
+        )
+        self.wrist_image_sub = self.create_subscription(
+            CompressedImage,
+            args.wrist_image_topic,
+            lambda msg: self._on_image("wrist", msg),
+            qos,
+        )
         self.watchdog_timer = self.create_timer(0.1, self._on_watchdog)
 
-        self.command_timeout_s = command_timeout_s
+        self.command_timeout_s = args.command_timeout_s
         self.last_command_time = 0.0
         self.latest_observation: dict[str, Any] | None = None
+        self.latest_images: dict[str, str] = {}
         self.latest_observation_seq = 0
         self._lock = threading.Lock()
 
@@ -89,6 +108,11 @@ class LeKiwiWebSocketBridge(Node):
 
         with self._lock:
             self.latest_observation = observation
+            self.latest_observation_seq += 1
+
+    def _on_image(self, name: str, msg: CompressedImage) -> None:
+        with self._lock:
+            self.latest_images[name] = base64.b64encode(bytes(msg.data)).decode("utf-8")
             self.latest_observation_seq += 1
 
     def _on_watchdog(self) -> None:
@@ -108,9 +132,11 @@ class LeKiwiWebSocketBridge(Node):
 
     def snapshot_observation(self) -> tuple[int, dict[str, Any] | None]:
         with self._lock:
-            if self.latest_observation is None:
+            if self.latest_observation is None and not self.latest_images:
                 return self.latest_observation_seq, None
-            return self.latest_observation_seq, dict(self.latest_observation)
+            observation = dict(self.latest_observation or {})
+            observation.update(self.latest_images)
+            return self.latest_observation_seq, observation
 
 
 def command_from_payload(payload: dict[str, Any]) -> Command:
@@ -193,6 +219,8 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Publish a stop command if the phone stops sending commands",
     )
+    parser.add_argument("--front-image-topic", default="/lekiwi/front/image/compressed")
+    parser.add_argument("--wrist-image-topic", default="/lekiwi/wrist/image/compressed")
     return parser.parse_args()
 
 
@@ -222,7 +250,7 @@ def main() -> None:
     args = parse_args()
 
     rclpy.init()
-    node = LeKiwiWebSocketBridge(command_timeout_s=args.command_timeout_s)
+    node = LeKiwiWebSocketBridge(args)
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
