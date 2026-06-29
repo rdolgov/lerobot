@@ -10,10 +10,14 @@ iPhone SwiftUI app
         |
         v
 ROS2 WebSocket bridge on Pi/Ubuntu
-  publishes /lekiwi/action
+  publishes /lekiwi/action for base
+  publishes /lekiwi/arm/command for arm targets
   subscribes /lekiwi/observation
-        |
-        v
+        |                         |
+        |                         v
+        |                  lekiwi_arm_controller
+        |                         |
+        v                         v
 lekiwi_host_node
   talks to LeRobot LeKiwi hardware
 ```
@@ -46,7 +50,34 @@ ros2 run lekiwi_ros_bridge lekiwi_host_node --ros-args \
 Keep `disable_cameras:=true` when using the separate camera publisher below.
 That avoids two processes fighting over `/dev/video*`.
 
-## 2. Start the camera publisher
+## 2. Start the arm controller
+
+In another terminal on any machine that can see the LeKiwi ROS2 topics:
+
+```bash
+source ~/ros2_lekiwi_env.sh
+cd ~/dev/fork/rdolgov/lerobot
+python examples/lekiwi/ios_control/ros2_arm_controller.py
+```
+
+It subscribes to:
+
+```text
+/lekiwi/arm/command
+/lekiwi/observation
+```
+
+and publishes stepped LeRobot-style arm actions to:
+
+```text
+/lekiwi/action
+```
+
+The default `--max-step 4.0` limits each publish tick to a small joint change.
+Use mock mode first, then real hardware with the arm clear of the robot body,
+table, cables, and your hands.
+
+## 3. Start the camera publisher
 
 On the Pi that owns the mobile-base cameras:
 
@@ -76,7 +107,7 @@ python examples/lekiwi/ios_control/ros2_camera_publisher.py \
   --jpeg-quality 80
 ```
 
-## 3. Start the WebSocket bridge
+## 4. Start the WebSocket bridge
 
 On any machine that can see the LeKiwi ROS2 topics, usually the same Pi:
 
@@ -102,16 +133,20 @@ You should see:
 
 ```text
 /lekiwi/action [std_msgs/msg/String]
+/lekiwi/arm/command [std_msgs/msg/String]
 /lekiwi/observation [std_msgs/msg/String]
 /lekiwi/front/image/compressed [sensor_msgs/msg/CompressedImage]
 /lekiwi/wrist/image/compressed [sensor_msgs/msg/CompressedImage]
 /lekiwi_ios_websocket_bridge
+/lekiwi_arm_controller
 ```
 
 The WebSocket bridge subscribes to the compressed image topics and forwards the
 latest JPEGs to the iPhone as base64 fields named `front` and `wrist`.
+It also forwards iPhone arm targets to `/lekiwi/arm/command`; the arm controller
+node turns those into safe `/lekiwi/action` updates.
 
-## 4. Open the iOS app
+## 5. Open the iOS app
 
 On your Mac:
 
@@ -128,7 +163,7 @@ In Xcode:
 
 On first launch, iOS may ask for Local Network permission. Allow it.
 
-## 5. Connect from the phone
+## 6. Connect from the phone
 
 Use the bridge machine hostname or IP:
 
@@ -144,6 +179,12 @@ Tap **Connect**. Hold movement buttons to send repeated commands:
 - Left/right: `y.vel`
 - Turn L/R: `theta.vel`
 - Stop: zero command
+
+Switch to **Arm** to control the arm. The sketch shows the desired target arm
+with the latest observed arm overlaid. Drag the sketch for shoulder/elbow
+movement, use sliders for individual joints, tap **Sync** before the first real
+move, then tap **Send**. **Live** streams target changes while you drag or move
+sliders.
 
 The app sends commands every `0.1s` while a button is held and sends stop on
 release. The WebSocket bridge also publishes a stop command if phone commands
@@ -176,6 +217,17 @@ ros2 topic echo /lekiwi/action --qos-reliability best_effort
 
 Then press a button in the app. You should see JSON with `x.vel`, `y.vel`, or
 `theta.vel`.
+
+If the arm UI does not move the mock arm observation:
+
+```bash
+source ~/ros2_lekiwi_env.sh
+ros2 topic echo /lekiwi/arm/command --qos-reliability best_effort
+ros2 topic echo /lekiwi/action --qos-reliability best_effort
+```
+
+Move an arm slider or tap **Send**. You should first see `arm_command` JSON, then
+an action JSON containing fields such as `arm_shoulder_lift.pos`.
 
 For first real-robot testing, lift the wheels and keep the physical power switch
 within reach.

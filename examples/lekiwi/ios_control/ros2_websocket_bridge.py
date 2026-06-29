@@ -6,6 +6,7 @@ The bridge talks ROS2 on one side and plain WebSocket JSON on the other:
 
     iPhone app <-> ws://<bridge-host>:8765 <->
       /lekiwi/action
+      /lekiwi/arm/command
       /lekiwi/observation
       /lekiwi/front/image/compressed
       /lekiwi/wrist/image/compressed
@@ -72,6 +73,7 @@ class LeKiwiWebSocketBridge(Node):
         )
 
         self.action_pub = self.create_publisher(String, "/lekiwi/action", qos)
+        self.arm_command_pub = self.create_publisher(String, args.arm_command_topic, qos)
         self.observation_sub = self.create_subscription(
             String,
             "/lekiwi/observation",
@@ -125,7 +127,15 @@ class LeKiwiWebSocketBridge(Node):
     def publish_command(self, command: Command) -> None:
         self.action_pub.publish(String(data=json.dumps(command.as_lerobot_action())))
 
+    def publish_arm_stop(self) -> None:
+        self.arm_command_pub.publish(String(data=json.dumps({"type": "arm_stop"})))
+
     def publish_client_payload(self, payload: dict[str, Any]) -> None:
+        message_type = payload.get("type", "command")
+        if message_type in {"arm_command", "arm_stop"}:
+            self.arm_command_pub.publish(String(data=json.dumps(payload)))
+            return
+
         command = command_from_payload(payload)
         self.publish_command(command)
         self.last_command_time = time.monotonic()
@@ -174,6 +184,7 @@ async def handle_client(websocket: Any, node: LeKiwiWebSocketBridge) -> None:
             LOGGER.info("client task ended: %s", exc)
 
     node.publish_command(Command())
+    node.publish_arm_stop()
     LOGGER.info("client disconnected: %s", peer)
 
 
@@ -221,6 +232,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--front-image-topic", default="/lekiwi/front/image/compressed")
     parser.add_argument("--wrist-image-topic", default="/lekiwi/wrist/image/compressed")
+    parser.add_argument("--arm-command-topic", default="/lekiwi/arm/command")
     return parser.parse_args()
 
 
@@ -258,6 +270,7 @@ def main() -> None:
         asyncio.run(run_server(args, node))
     finally:
         node.publish_command(Command())
+        node.publish_arm_stop()
         node.destroy_node()
         rclpy.shutdown()
         spin_thread.join(timeout=2)

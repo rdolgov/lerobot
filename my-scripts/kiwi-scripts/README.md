@@ -510,8 +510,19 @@ examples/lekiwi/ios_control/
 
 The phone talks WebSocket JSON to a bridge process, and the bridge publishes to
 `/lekiwi/action` while forwarding `/lekiwi/observation` images back to the app.
+For arm control, run the extra arm controller node so phone arm targets go
+through `/lekiwi/arm/command` before becoming `/lekiwi/action` messages.
 
-Start the bridge on a Pi or Ubuntu machine that can see the LeKiwi ROS2 topics:
+Start the arm controller on a Pi or Ubuntu machine that can see the LeKiwi ROS2
+topics:
+
+```bash
+source ~/ros2_lekiwi_env.sh
+cd ~/dev/fork/rdolgov/lerobot
+python examples/lekiwi/ios_control/ros2_arm_controller.py
+```
+
+Then start the bridge:
 
 ```bash
 source ~/ros2_lekiwi_env.sh

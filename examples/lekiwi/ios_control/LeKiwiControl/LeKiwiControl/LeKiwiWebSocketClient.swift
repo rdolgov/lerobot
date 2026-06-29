@@ -11,12 +11,19 @@ final class LeKiwiWebSocketClient: ObservableObject {
     @Published var lastX: Double = 0
     @Published var lastY: Double = 0
     @Published var lastTheta: Double = 0
+    @Published var armShoulderPan: Double = 0
+    @Published var armShoulderLift: Double = 0
+    @Published var armElbowFlex: Double = 0
+    @Published var armWristFlex: Double = 0
+    @Published var armWristRoll: Double = 0
+    @Published var armGripper: Double = 0
+    @Published var armObservationVersion = 0
 
     private var task: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
 
     func connect() {
-        disconnect(sendStop: false)
+        disconnect(sendStop: true)
 
         guard let url = URL(string: endpoint) else {
             statusText = "Invalid URL"
@@ -35,6 +42,7 @@ final class LeKiwiWebSocketClient: ObservableObject {
     func disconnect(sendStop: Bool = true) {
         if sendStop {
             sendStopCommand()
+            sendArmStopCommand()
         }
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -53,6 +61,17 @@ final class LeKiwiWebSocketClient: ObservableObject {
 
     func sendStopCommand() {
         sendJSON(["type": "stop"])
+    }
+
+    func sendArmTargets(_ joints: [String: Double]) {
+        sendJSON([
+            "type": "arm_command",
+            "joints": joints,
+        ])
+    }
+
+    func sendArmStopCommand() {
+        sendJSON(["type": "arm_stop"])
     }
 
     private func sendJSON(_ object: [String: Any]) {
@@ -138,6 +157,12 @@ final class LeKiwiWebSocketClient: ObservableObject {
         let x = number(observation["x.vel"])
         let y = number(observation["y.vel"])
         let theta = number(observation["theta.vel"])
+        let shoulderPan = number(observation["arm_shoulder_pan.pos"])
+        let shoulderLift = number(observation["arm_shoulder_lift.pos"])
+        let elbowFlex = number(observation["arm_elbow_flex.pos"])
+        let wristFlex = number(observation["arm_wrist_flex.pos"])
+        let wristRoll = number(observation["arm_wrist_roll.pos"])
+        let gripper = number(observation["arm_gripper.pos"])
 
         DispatchQueue.main.async {
             if let front {
@@ -149,6 +174,34 @@ final class LeKiwiWebSocketClient: ObservableObject {
             self.lastX = x ?? self.lastX
             self.lastY = y ?? self.lastY
             self.lastTheta = theta ?? self.lastTheta
+            var sawArmObservation = false
+            if let shoulderPan {
+                self.armShoulderPan = shoulderPan
+                sawArmObservation = true
+            }
+            if let shoulderLift {
+                self.armShoulderLift = shoulderLift
+                sawArmObservation = true
+            }
+            if let elbowFlex {
+                self.armElbowFlex = elbowFlex
+                sawArmObservation = true
+            }
+            if let wristFlex {
+                self.armWristFlex = wristFlex
+                sawArmObservation = true
+            }
+            if let wristRoll {
+                self.armWristRoll = wristRoll
+                sawArmObservation = true
+            }
+            if let gripper {
+                self.armGripper = gripper
+                sawArmObservation = true
+            }
+            if sawArmObservation {
+                self.armObservationVersion += 1
+            }
             self.statusText = "Receiving observations"
         }
     }
