@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import cv2
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
@@ -80,7 +81,7 @@ class LeKiwiCameraPublisher(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        self.publishers: dict[str, object] = {}
+        self._image_publishers: dict[str, object] = {}
         self.cameras: list[CameraHandle] = []
         self.timer = self.create_timer(1.0 / args.publish_fps, self.on_timer)
 
@@ -93,8 +94,8 @@ class LeKiwiCameraPublisher(Node):
                 fourcc=args.fourcc,
             )
             self.cameras.append(handle)
-            self.publishers[spec.name] = self.create_publisher(CompressedImage, spec.topic, qos)
-            self.get_logger().info("Publishing %s camera %s on %s", spec.name, spec.path, spec.topic)
+            self._image_publishers[spec.name] = self.create_publisher(CompressedImage, spec.topic, qos)
+            self.get_logger().info(f"Publishing {spec.name} camera {spec.path} on {spec.topic}")
 
         self.frame_count = 0
         self.last_log_time = time.monotonic()
@@ -103,7 +104,7 @@ class LeKiwiCameraPublisher(Node):
         for camera in self.cameras:
             data = camera.read_compressed()
             if data is None:
-                self.get_logger().warning("No frame from %s", camera.spec.name)
+                self.get_logger().warning(f"No frame from {camera.spec.name}")
                 continue
 
             msg = CompressedImage()
@@ -111,12 +112,12 @@ class LeKiwiCameraPublisher(Node):
             msg.header.frame_id = f"lekiwi_{camera.spec.name}_camera"
             msg.format = "jpeg"
             msg.data = data
-            self.publishers[camera.spec.name].publish(msg)
+            self._image_publishers[camera.spec.name].publish(msg)
 
         self.frame_count += 1
         now = time.monotonic()
         if now - self.last_log_time > 5:
-            self.get_logger().info("Published camera frames at %.1f Hz", self.frame_count / (now - self.last_log_time))
+            self.get_logger().info(f"Published camera frames at {self.frame_count / (now - self.last_log_time):.1f} Hz")
             self.frame_count = 0
             self.last_log_time = now
 
@@ -198,11 +199,12 @@ def main() -> None:
     node = LeKiwiCameraPublisher(args)
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
